@@ -46,9 +46,16 @@ export const Viewports = {
     MOBILE: { width: 375, height: 667 }
 } as const;
 
+export interface RegionVerdict {
+    decision: 'intentional' | 'bug' | 'noise' | 'needs_review';
+    confidence: number;
+    reasoning: string;
+}
+
 export interface RegressionbotSummaryItem {
     label: string;
     text: string;
+    verdict?: RegionVerdict;
 }
 
 /**
@@ -118,6 +125,28 @@ export interface JobSummary {
     newBaselines: Array<{ url: string; variantName: string }>;
     /** Pages that failed to capture or compare. */
     errors: Array<{ url: string; variantName: string; errorMessage: string }>;
+    intentAssessment?: IntentAssessment;
+    runContext?: RunContext;
+}
+
+export interface RunContext {
+    changeDescription?: string;
+    gitCommitSha?: string;
+    gitCommitMessage?: string;
+    prTitle?: string;
+    prDescription?: string;
+    expectedChanges?: string[];
+    scope?: string[];
+}
+
+export interface IntentAssessment {
+    intentProvided: boolean;
+    bugCount: number;
+    intentionalCount: number;
+    noiseCount: number;
+    needsReviewCount: number;
+    allAccountedFor: boolean;
+    summary: string;
 }
 
 export interface JobAiSummary {
