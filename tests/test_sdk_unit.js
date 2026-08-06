@@ -38,6 +38,9 @@ async function testJobBuilderMethods() {
         .scan('/blog/**', { limit: 20 })
         .concurrency(5)
         .mask(['.ads', '#modal'])
+        .customCss('#chat-widget { display: none !important; }')
+        .withContext({ changeDescription: 'restyle the pricing table' })
+        .withContext({ gitCommitSha: 'abc123', expectedChanges: ['pricing table colours'] })
         .autoApprove(true);
     
     // Test that methods return 'this' for chaining
@@ -65,7 +68,13 @@ async function testJobBuilderMethods() {
         assert.strictEqual(body.concurrency, 5);
         assert.strictEqual(body.autoApprove, true);
         assert.deepStrictEqual(body.masks, ['.ads', '#modal']);
-        
+        assert.strictEqual(body.customCss, '#chat-widget { display: none !important; }');
+        assert.deepStrictEqual(body.runContext, {
+            changeDescription: 'restyle the pricing table',
+            gitCommitSha: 'abc123',
+            expectedChanges: ['pricing table colours']
+        });
+
         return {
             ok: true,
             json: async () => ({ jobId: 'job-123' })
@@ -378,15 +387,54 @@ async function testProjectMethods() {
     setMockFetch(async (url, options) => {
         assert.strictEqual(url, 'http://localhost:9999/project/my-project/run');
         assert.strictEqual(options.method, 'POST');
-        assert.deepStrictEqual(JSON.parse(options.body), { autoApprove: true, concurrency: 5 });
+        assert.deepStrictEqual(JSON.parse(options.body), {
+            autoApprove: true,
+            concurrency: 5,
+            customCss: '.banner { display: none; }',
+            runContext: { prTitle: 'Refresh the pricing page' }
+        });
         return {
             ok: true,
             json: async () => ({ jobId: 'job-project-123' })
         };
     });
-    const job = await sdk.runProject('my-project', { autoApprove: true, concurrency: 5 });
+    const job = await sdk.runProject('my-project', {
+        autoApprove: true,
+        concurrency: 5,
+        customCss: '.banner { display: none; }',
+        runContext: { prTitle: 'Refresh the pricing page' }
+    });
     assert.strictEqual(job.jobId, 'job-project-123');
     console.log('  OK: runProject() works');
+    restoreFetch();
+
+    // Test updateProject() carries scheduling fields, including a null to clear a schedule
+    console.log('  Testing updateProject() scheduling fields...');
+    setMockFetch(async (url, options) => {
+        assert.strictEqual(url, 'http://localhost:9999/project/my-project');
+        assert.strictEqual(options.method, 'PUT');
+        assert.deepStrictEqual(JSON.parse(options.body), {
+            baselinePolicy: 'rolling',
+            schedule: 'daily'
+        });
+        return {
+            ok: true,
+            json: async () => ({ name: 'my-project', baselinePolicy: 'rolling', schedule: 'daily' })
+        };
+    });
+    const updated = await sdk.updateProject('my-project', { baselinePolicy: 'rolling', schedule: 'daily' });
+    assert.strictEqual(updated.schedule, 'daily');
+    restoreFetch();
+
+    setMockFetch(async (url, options) => {
+        assert.deepStrictEqual(JSON.parse(options.body), { schedule: null });
+        return {
+            ok: true,
+            json: async () => ({ name: 'my-project' })
+        };
+    });
+    await sdk.updateProject('my-project', { schedule: null });
+    console.log('  OK: updateProject() sends schedule and baselinePolicy');
     restoreFetch();
 
     console.log('All Project tests passed!\n');

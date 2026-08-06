@@ -24,6 +24,8 @@ Unlike traditional visual diffing libraries, RegressionBot is designed for moder
 - **Matrix Testing**: Test multiple devices and viewports in a single job.
 - **Auto-Discovery**: Scan sitemaps with glob patterns and limits.
 - **RegressionBot Summaries**: Plain-English change descriptions for every regression, generated on-demand via the API.
+- **Intent-Aware Verdicts**: Describe what a run is meant to change, and every regression comes back judged as intentional, a bug, or noise.
+- **Scheduled Checks**: Run a saved project unattended, hourly, daily, or weekly.
 - **Project-Based Baselines**: Save and reuse test configurations; share visual history across environments.
 - **Auto-Approval**: Automatically promote screenshots to baselines on jobs that pass your criteria.
 - **Zero Infrastructure**: No browser maintenance or server provisioning — RegressionBot handles it all.
@@ -91,6 +93,12 @@ const job = await rb
   .mask(['.ads', '#modal']) // Manual selectors
   // Tip: Adding 'data-vr-mask' to your HTML elements masks them automatically!
 
+  // Custom CSS: Injected before every screenshot (max 4096 chars)
+  .customCss('#chat-widget { display: none !important; }')
+
+  // Intent: What this run is testing, so changes can be judged against it
+  .withContext({ changeDescription: 'Restyle the pricing table' })
+
   // Execute: Compiles manifest and triggers the API
   .run();
 
@@ -112,9 +120,9 @@ const summary = await job.getSummary();
 if (summary.regressions.length > 0) {
   console.log(`\n${summary.regressions.length} regressions found:`);
   for (const regression of summary.regressions) {
-    if (regression.regressionbotSummary) {
-      console.log(`\nRegressionBot Summary for ${regression.url}:`);
-      console.log(`> ${regression.regressionbotSummary}`);
+    for (const item of regression.regressionbotSummary ?? []) {
+      // `label` is the region letter (A, B, C…), or '' for a whole-page change
+      console.log(`[${item.label}] ${item.text}`);
     }
   }
 }
@@ -122,6 +130,58 @@ if (summary.regressions.length > 0) {
 // Or trigger RegressionBot summary generation on-demand for a completed job:
 const aiResult = await job.generateAiSummary();
 console.log(`Generated summaries for ${aiResult.summaries.length} regressions.`);
+```
+
+### Intent-Aware Verdicts
+
+Tell RegressionBot what a run is meant to change, and every regression comes back judged
+against that intent — `intentional`, `bug`, `noise`, or `needs_review`.
+
+```typescript
+const job = await rb
+  .test(process.env.VERCEL_PREVIEW_URL)
+  .forProject('marketing-site-v2')
+  .withContext({
+    changeDescription: 'Restyle the pricing table',
+    gitCommitSha: process.env.GITHUB_SHA,
+    prTitle: process.env.PR_TITLE,
+    expectedChanges: ['Pricing table background is now dark'],
+    scope: ['components/PricingTable.tsx'],
+  })
+  .run();
+
+await job.waitForCompletion(2000, undefined, { waitForSummaries: true });
+const summary = await job.getSummary();
+
+// Whole-job roll-up: does everything that changed line up with the stated intent?
+console.log(summary.intentAssessment?.summary);
+console.log(`Bugs: ${summary.intentAssessment?.bugCount}`);
+
+// Per-result verdict, plus the per-region verdicts behind it
+for (const r of summary.regressions) {
+  console.log(`${r.url}: ${r.verdict?.decision} (${r.verdict?.avgConfidence})`);
+}
+
+// Fail CI only on changes that were not intended
+const bugs = summary.regressions.filter(r => r.verdict?.decision === 'bug');
+if (bugs.length > 0) process.exit(1);
+```
+
+### Hiding Dynamic Content
+
+`.mask()` hides elements by selector. `.customCss()` injects arbitrary CSS before each
+screenshot when masking isn't enough — collapsing an animation, pinning a carousel, or
+neutralising a third-party widget. Max 4096 characters.
+
+```typescript
+const job = await rb
+  .test('https://preview.myapp.com')
+  .forProject('my-app-web')
+  .customCss(`
+    #chat-widget { display: none !important; }
+    * { animation: none !important; transition: none !important; }
+  `)
+  .run();
 ```
 
 ### Progress Tracking
@@ -177,6 +237,34 @@ const summary = await job.getSummary();
 console.log(`Score: ${summary.overallScore}/100`);
 ```
 
+### Scheduled Checks
+
+A project can run unattended on a fixed cadence. Scheduling requires
+`baselinePolicy: 'rolling'` on a managed project — on the default `approved` policy an
+unapproved change would be re-reported on every subsequent run, so the API rejects the
+combination. Live-vs-live projects store no baseline and are exempt.
+
+```typescript
+// Turn on a daily unattended check
+await rb.updateProject('marketing-site-v2', {
+  baselinePolicy: 'rolling',
+  schedule: 'daily',   // 'hourly' | 'daily' | 'weekly'
+});
+
+// Turn it back off
+await rb.updateProject('marketing-site-v2', { schedule: null });
+
+// Read back when the scheduler last fired — the next run is due one interval after this
+const project = await rb.getProject('marketing-site-v2');
+console.log(project.schedule, project.lastScheduledRunAt);
+```
+
+The first run starts at the next hourly sweep and the cadence anchors to it; there is no
+time-of-day setting. Setting a schedule or a baseline policy does **not** invalidate
+baselines — only changes that affect what a capture looks like (`testOrigin`,
+`baseOrigin`, `sitemapUrl`, `paths`, `scans`, `devices`, `masks`, `customCss`) do that.
+Billing is per comparison, so cost scales with frequency.
+
 ### Reconnecting to an Existing Job
 
 If you have a job ID from a previous run (e.g., stored in CI state), you can attach to it without re-running the test:
@@ -208,6 +296,12 @@ npx @regressionbot/sdk https://example.com --project my-site --on "Desktop Chrom
 Test an entire site using glob patterns.
 ```bash
 npx @regressionbot/sdk https://example.com --project my-project --scan "/**" --exclude "/admin/**" --concurrency 20
+```
+
+Use `--mask` to hide elements by selector, or `--custom-css` to inject CSS before every
+screenshot:
+```bash
+npx @regressionbot/sdk https://example.com --project my-site --custom-css "#chat-widget { display: none !important; }"
 ```
 
 #### 3. Job Summary
