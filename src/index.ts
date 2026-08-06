@@ -125,6 +125,8 @@ export class RegressionBot {
             customCss?: string;
             concurrency?: number;
             autoApprove?: boolean;
+            /** What this run is testing, used to judge whether changes were intended. */
+            runContext?: RunContext;
         } = {}
     ): Promise<JobHandle> {
         const res = await this._request<{ jobId: string }>(

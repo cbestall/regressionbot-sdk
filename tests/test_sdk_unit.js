@@ -390,7 +390,8 @@ async function testProjectMethods() {
         assert.deepStrictEqual(JSON.parse(options.body), {
             autoApprove: true,
             concurrency: 5,
-            customCss: '.banner { display: none; }'
+            customCss: '.banner { display: none; }',
+            runContext: { prTitle: 'Refresh the pricing page' }
         });
         return {
             ok: true,
@@ -400,7 +401,8 @@ async function testProjectMethods() {
     const job = await sdk.runProject('my-project', {
         autoApprove: true,
         concurrency: 5,
-        customCss: '.banner { display: none; }'
+        customCss: '.banner { display: none; }',
+        runContext: { prTitle: 'Refresh the pricing page' }
     });
     assert.strictEqual(job.jobId, 'job-project-123');
     console.log('  OK: runProject() works');

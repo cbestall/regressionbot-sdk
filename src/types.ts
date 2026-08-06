@@ -200,7 +200,10 @@ export interface PageResult {
     currentUrl: string | null;
     /** Pre-signed URL for the side-by-side annotated diff image. */
     diffUrl: string | null;
-    /** Pre-signed URL for the diff mask. Returned by getStatus() only. */
+    /**
+     * Pre-signed URL for the diff mask. getStatus() always sends the key, null when
+     * there is no mask; getSummary() omits it entirely in that case.
+     */
     maskUrl?: string | null;
 }
 
@@ -234,11 +237,7 @@ export interface JobSummary {
     /** getSummary() throws until the job reaches one of these. */
     status: 'COMPLETED' | 'APPROVED' | 'FAILED';
     summaryStatus: SummaryStatus;
-    /**
-     * Absent on a clean job — unlike getStatus(), which always sends null.
-     * Verified against a live response.
-     */
-    error?: string | null;
+    error: string | null;
     totalUrls: number;
     completedCount: number;
     /** Overall quality score 0–100 across all tested pages. */

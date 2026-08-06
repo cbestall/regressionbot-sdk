@@ -167,8 +167,15 @@ const bugs = summary.regressions.filter(r => r.verdict?.decision === 'bug');
 if (bugs.length > 0) process.exit(1);
 ```
 
-> Intent is available on `.test(...)` runs only. `runProject()` does not currently
-> carry a run context — the API drops the field on that endpoint.
+`runProject()` takes the same context, so a run from a saved project can be
+intent-aware too:
+
+```typescript
+const job = await rb.runProject('marketing-site-v2', {
+  testOrigin: process.env.VERCEL_PREVIEW_URL,
+  runContext: { changeDescription: 'Restyle the pricing table' },
+});
+```
 
 ### Hiding Dynamic Content
 
