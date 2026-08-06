@@ -12,11 +12,16 @@ import {
     JobAiSummary,
     RegionVerdict,
     ResultVerdict,
+    VerdictDecision,
     RegressionbotSummaryItem,
     RunContext,
     IntentAssessment,
     BaselinePolicy,
-    ProjectSchedule
+    ProjectSchedule,
+    ProjectConfigUpdate,
+    EnvGate,
+    SummaryStatus,
+    ApproveResult
 } from './types';
 import {
     sanitizeFilename,
@@ -41,11 +46,16 @@ export type {
     JobAiSummary,
     RegionVerdict,
     ResultVerdict,
+    VerdictDecision,
     RegressionbotSummaryItem,
     RunContext,
     IntentAssessment,
     BaselinePolicy,
-    ProjectSchedule
+    ProjectSchedule,
+    ProjectConfigUpdate,
+    EnvGate,
+    SummaryStatus,
+    ApproveResult
 };
 
 export class RegressionBot {
@@ -115,8 +125,6 @@ export class RegressionBot {
             customCss?: string;
             concurrency?: number;
             autoApprove?: boolean;
-            /** What this run is testing, used to judge whether changes were intended. */
-            runContext?: RunContext;
         } = {}
     ): Promise<JobHandle> {
         const res = await this._request<{ jobId: string }>(
@@ -129,16 +137,21 @@ export class RegressionBot {
 
     /**
      * Update the configuration settings for a named project.
+     *
+     * Changing anything that decides what a capture looks like invalidates the
+     * stored baselines — see {@link ProjectConfigUpdate}.
      */
     public async updateProject(
         projectName: string,
-        config: Partial<ProjectConfig>
+        config: ProjectConfigUpdate
     ): Promise<ProjectConfig> {
-        return this._request<ProjectConfig>(
+        // The API wraps the updated project in { message, project }.
+        const res = await this._request<{ message: string; project: ProjectConfig }>(
             `/project/${encodeURIComponent(projectName)}`,
             'PUT',
             config
         );
+        return res.project;
     }
 
 
@@ -319,8 +332,8 @@ export class JobHandle {
         return this.sdk._request<JobSummary>(`/job/${encodeURIComponent(this.jobId)}/summary`);
     }
 
-    public async approve(): Promise<{ message: string; jobId: string; approvedUrlsCount: number; failedCount?: number }> {
-        return this.sdk._request('/approve', 'POST', { jobId: this.jobId });
+    public async approve(): Promise<ApproveResult> {
+        return this.sdk._request<ApproveResult>('/approve', 'POST', { jobId: this.jobId });
     }
 
     /**

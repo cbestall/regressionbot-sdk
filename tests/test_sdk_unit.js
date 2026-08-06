@@ -390,8 +390,7 @@ async function testProjectMethods() {
         assert.deepStrictEqual(JSON.parse(options.body), {
             autoApprove: true,
             concurrency: 5,
-            customCss: '.banner { display: none; }',
-            runContext: { prTitle: 'Refresh the pricing page' }
+            customCss: '.banner { display: none; }'
         });
         return {
             ok: true,
@@ -401,8 +400,7 @@ async function testProjectMethods() {
     const job = await sdk.runProject('my-project', {
         autoApprove: true,
         concurrency: 5,
-        customCss: '.banner { display: none; }',
-        runContext: { prTitle: 'Refresh the pricing page' }
+        customCss: '.banner { display: none; }'
     });
     assert.strictEqual(job.jobId, 'job-project-123');
     console.log('  OK: runProject() works');
@@ -417,24 +415,29 @@ async function testProjectMethods() {
             baselinePolicy: 'rolling',
             schedule: 'daily'
         });
+        // The API wraps the project in { message, project }
         return {
             ok: true,
-            json: async () => ({ name: 'my-project', baselinePolicy: 'rolling', schedule: 'daily' })
+            json: async () => ({
+                message: 'Project configuration updated and baselines invalidated successfully',
+                project: { name: 'my-project', baselinePolicy: 'rolling', schedule: 'daily' }
+            })
         };
     });
     const updated = await sdk.updateProject('my-project', { baselinePolicy: 'rolling', schedule: 'daily' });
-    assert.strictEqual(updated.schedule, 'daily');
+    assert.strictEqual(updated.schedule, 'daily', 'updateProject must unwrap the { message, project } envelope');
+    assert.strictEqual(updated.message, undefined, 'updateProject must not return the envelope itself');
     restoreFetch();
 
     setMockFetch(async (url, options) => {
         assert.deepStrictEqual(JSON.parse(options.body), { schedule: null });
         return {
             ok: true,
-            json: async () => ({ name: 'my-project' })
+            json: async () => ({ message: 'ok', project: { name: 'my-project' } })
         };
     });
     await sdk.updateProject('my-project', { schedule: null });
-    console.log('  OK: updateProject() sends schedule and baselinePolicy');
+    console.log('  OK: updateProject() sends schedule and baselinePolicy, and unwraps the response');
     restoreFetch();
 
     console.log('All Project tests passed!\n');

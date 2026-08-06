@@ -167,6 +167,9 @@ const bugs = summary.regressions.filter(r => r.verdict?.decision === 'bug');
 if (bugs.length > 0) process.exit(1);
 ```
 
+> Intent is available on `.test(...)` runs only. `runProject()` does not currently
+> carry a run context — the API drops the field on that endpoint.
+
 ### Hiding Dynamic Content
 
 `.mask()` hides elements by selector. `.customCss()` injects arbitrary CSS before each
@@ -236,6 +239,29 @@ const status = await job.waitForCompletion();
 const summary = await job.getSummary();
 console.log(`Score: ${summary.overallScore}/100`);
 ```
+
+### Environment Gates
+
+If an origin sits behind basic auth, a bypass header, or a session cookie, store the
+credential on the project. It is encrypted at rest and never returned — reads report
+only `{ configured: true }`.
+
+```typescript
+await rb.updateProject('marketing-site-v2', {
+  testAuth: { basic: { username: 'preview', password: process.env.PREVIEW_PASSWORD! } },
+  // or: { headers: { 'x-vercel-protection-bypass': token } }
+  // or: { cookies: [{ name: 'session', value: token }] }
+});
+
+const project = await rb.getProject('marketing-site-v2');
+console.log(project.testAuth); // { configured: true }
+
+// Clear it
+await rb.updateProject('marketing-site-v2', { testAuth: null });
+```
+
+Setting or clearing a gate credential invalidates the stored baselines, since it changes
+what the capture can reach.
 
 ### Scheduled Checks
 
