@@ -51,12 +51,34 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          # Writes the .npmrc pointing at the public registry. Without it the OIDC
+          # exchange below has no registry to present its token to.
+          registry-url: 'https://registry.npmjs.org'
+
+      # Node 22 bundles npm 10.x, which predates trusted publishing — it would look for
+      # an auth token, find none, and fail on a release rather than on any run we have
+      # seen, since this job has never executed. OIDC landed in npm 11.5.1.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
 
       - name: Install Dependencies
         run: npm ci
 
       - name: Build Package
         run: npm run build
+
+      - name: Verify the tag matches package.json
+        # A release cut from the wrong tag would otherwise republish the current version
+        # and fail late, inside npm, after the build has already passed.
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match package.json version $PKG"
+            exit 1
+          fi
 
       - name: Publish to NPM
         run: npm publish --provenance --access public
