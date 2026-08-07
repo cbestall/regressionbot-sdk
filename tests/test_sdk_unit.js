@@ -38,6 +38,9 @@ async function testJobBuilderMethods() {
         .scan('/blog/**', { limit: 20 })
         .concurrency(5)
         .mask(['.ads', '#modal'])
+        .customCss('#chat-widget { display: none !important; }')
+        .withContext({ changeDescription: 'restyle the pricing table' })
+        .withContext({ gitCommitSha: 'abc123', expectedChanges: ['pricing table colours'] })
         .autoApprove(true);
     
     // Test that methods return 'this' for chaining
@@ -65,7 +68,13 @@ async function testJobBuilderMethods() {
         assert.strictEqual(body.concurrency, 5);
         assert.strictEqual(body.autoApprove, true);
         assert.deepStrictEqual(body.masks, ['.ads', '#modal']);
-        
+        assert.strictEqual(body.customCss, '#chat-widget { display: none !important; }');
+        assert.deepStrictEqual(body.runContext, {
+            changeDescription: 'restyle the pricing table',
+            gitCommitSha: 'abc123',
+            expectedChanges: ['pricing table colours']
+        });
+
         return {
             ok: true,
             json: async () => ({ jobId: 'job-123' })
@@ -378,15 +387,85 @@ async function testProjectMethods() {
     setMockFetch(async (url, options) => {
         assert.strictEqual(url, 'http://localhost:9999/project/my-project/run');
         assert.strictEqual(options.method, 'POST');
-        assert.deepStrictEqual(JSON.parse(options.body), { autoApprove: true, concurrency: 5 });
+        assert.deepStrictEqual(JSON.parse(options.body), {
+            autoApprove: true,
+            concurrency: 5,
+            customCss: '.banner { display: none; }',
+            runContext: { prTitle: 'Refresh the pricing page' }
+        });
         return {
             ok: true,
             json: async () => ({ jobId: 'job-project-123' })
         };
     });
-    const job = await sdk.runProject('my-project', { autoApprove: true, concurrency: 5 });
+    const job = await sdk.runProject('my-project', {
+        autoApprove: true,
+        concurrency: 5,
+        customCss: '.banner { display: none; }',
+        runContext: { prTitle: 'Refresh the pricing page' }
+    });
     assert.strictEqual(job.jobId, 'job-project-123');
     console.log('  OK: runProject() works');
+    restoreFetch();
+
+    // Test updateProject() carries scheduling fields, including a null to clear a schedule
+    console.log('  Testing updateProject() scheduling fields...');
+    setMockFetch(async (url, options) => {
+        assert.strictEqual(url, 'http://localhost:9999/project/my-project');
+        assert.strictEqual(options.method, 'PUT');
+        assert.deepStrictEqual(JSON.parse(options.body), {
+            baselinePolicy: 'rolling',
+            schedule: 'daily'
+        });
+        // The API wraps the project in { message, project }
+        return {
+            ok: true,
+            json: async () => ({
+                message: 'Project configuration updated and baselines invalidated successfully',
+                project: { name: 'my-project', baselinePolicy: 'rolling', schedule: 'daily' }
+            })
+        };
+    });
+    const updated = await sdk.updateProject('my-project', { baselinePolicy: 'rolling', schedule: 'daily' });
+    assert.strictEqual(updated.schedule, 'daily', 'updateProject must unwrap the { message, project } envelope');
+    assert.strictEqual(updated.message, undefined, 'updateProject must not return the envelope itself');
+    restoreFetch();
+
+    setMockFetch(async (url, options) => {
+        assert.deepStrictEqual(JSON.parse(options.body), { schedule: null });
+        return {
+            ok: true,
+            json: async () => ({ message: 'ok', project: { name: 'my-project' } })
+        };
+    });
+    await sdk.updateProject('my-project', { schedule: null });
+    console.log('  OK: updateProject() sends schedule and baselinePolicy, and unwraps the response');
+    restoreFetch();
+
+    // scheduleHourUtc pins the slot, and a 0 must survive the wire — it is 00:00 UTC, not absent
+    setMockFetch(async (url, options) => {
+        assert.deepStrictEqual(JSON.parse(options.body), { schedule: 'daily', scheduleHourUtc: 0 });
+        return {
+            ok: true,
+            json: async () => ({
+                message: 'ok',
+                project: { name: 'my-project', schedule: 'daily', scheduleHourUtc: 0 }
+            })
+        };
+    });
+    const pinned = await sdk.updateProject('my-project', { schedule: 'daily', scheduleHourUtc: 0 });
+    assert.strictEqual(pinned.scheduleHourUtc, 0, 'updateProject must read back the pinned hour');
+    restoreFetch();
+
+    setMockFetch(async (url, options) => {
+        assert.deepStrictEqual(JSON.parse(options.body), { scheduleHourUtc: null });
+        return {
+            ok: true,
+            json: async () => ({ message: 'ok', project: { name: 'my-project', schedule: 'daily' } })
+        };
+    });
+    await sdk.updateProject('my-project', { scheduleHourUtc: null });
+    console.log('  OK: updateProject() sends scheduleHourUtc, including hour 0 and a null to clear it');
     restoreFetch();
 
     console.log('All Project tests passed!\n');

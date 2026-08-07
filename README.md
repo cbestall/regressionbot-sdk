@@ -24,6 +24,8 @@ Unlike traditional visual diffing libraries, RegressionBot is designed for moder
 - **Matrix Testing**: Test multiple devices and viewports in a single job.
 - **Auto-Discovery**: Scan sitemaps with glob patterns and limits.
 - **RegressionBot Summaries**: Plain-English change descriptions for every regression, generated on-demand via the API.
+- **Intent-Aware Verdicts**: Describe what a run is meant to change, and every regression comes back judged as intentional, a bug, or noise.
+- **Scheduled Checks**: Run a saved project unattended, hourly, daily, or weekly — and at a set UTC hour.
 - **Project-Based Baselines**: Save and reuse test configurations; share visual history across environments.
 - **Auto-Approval**: Automatically promote screenshots to baselines on jobs that pass your criteria.
 - **Zero Infrastructure**: No browser maintenance or server provisioning — RegressionBot handles it all.
@@ -33,6 +35,44 @@ Unlike traditional visual diffing libraries, RegressionBot is designed for moder
 ```bash
 npm install @regressionbot/sdk
 ```
+
+## Migration from 1.x
+
+2.0.0 re-types the SDK against what the API actually returns, taken from the
+orchestrator's implementation rather than from a spec that had drifted in both
+directions. Most of the breakage is caught by the compiler. One is not:
+
+```typescript
+// 1.x — updateProject() returned the raw { message, project } envelope,
+// so every field read off it was undefined at runtime
+const project = await rb.updateProject('site', { schedule: 'daily' });
+project.project.schedule;  // this is where the value actually was
+
+// 2.0 — the envelope is unwrapped for you
+const project = await rb.updateProject('site', { schedule: 'daily' });
+project.schedule;          // 'daily'
+```
+
+The rest surface as type errors:
+
+- **`PageResult.diffCount` is gone.** No endpoint ever returned it — both
+  `getJobStatus` and `getJobSummary` strip it. `PageResult` gains the fields they
+  do return: `status`, `isNewBaseline`, `errorMessage`, `elementsChanged`,
+  `domAssistSkipReason`, `maskUrl` and `verdict`. Image URLs are typed nullable,
+  which they always were.
+- **`updateProject()` takes `ProjectConfigUpdate`, not `Partial<ProjectConfig>`.**
+  The read and write shapes genuinely differ: a gate credential is written as an
+  `EnvGate` and read back only as `{ configured: true }`.
+- **`ProjectConfig.orgId` is gone** — the API stopped returning it.
+- **`summaryStatus` can be `FAILED`**, which the old union omitted. `error`,
+  `progress`, `results`, `createdAt` and `intentAssessment` are always returned.
+- **`approve()` gains `conflictedUrls`**, returned when another job updated a
+  baseline first.
+
+New in 2.0 and requiring a current API: `.customCss()` and `.withContext()` on
+the builder, intent-aware verdicts, environment gates, baseline policies, and
+scheduling. `scheduleHourUtc` needs API 2.7.0 or later — on an older API the
+field is accepted and ignored, and the schedule stays anchored to its first run.
 
 ## Usage
 
@@ -91,6 +131,12 @@ const job = await rb
   .mask(['.ads', '#modal']) // Manual selectors
   // Tip: Adding 'data-vr-mask' to your HTML elements masks them automatically!
 
+  // Custom CSS: Injected before every screenshot (max 4096 chars)
+  .customCss('#chat-widget { display: none !important; }')
+
+  // Intent: What this run is testing, so changes can be judged against it
+  .withContext({ changeDescription: 'Restyle the pricing table' })
+
   // Execute: Compiles manifest and triggers the API
   .run();
 
@@ -112,9 +158,9 @@ const summary = await job.getSummary();
 if (summary.regressions.length > 0) {
   console.log(`\n${summary.regressions.length} regressions found:`);
   for (const regression of summary.regressions) {
-    if (regression.regressionbotSummary) {
-      console.log(`\nRegressionBot Summary for ${regression.url}:`);
-      console.log(`> ${regression.regressionbotSummary}`);
+    for (const item of regression.regressionbotSummary ?? []) {
+      // `label` is the region letter (A, B, C…), or '' for a whole-page change
+      console.log(`[${item.label}] ${item.text}`);
     }
   }
 }
@@ -122,6 +168,68 @@ if (summary.regressions.length > 0) {
 // Or trigger RegressionBot summary generation on-demand for a completed job:
 const aiResult = await job.generateAiSummary();
 console.log(`Generated summaries for ${aiResult.summaries.length} regressions.`);
+```
+
+### Intent-Aware Verdicts
+
+Tell RegressionBot what a run is meant to change, and every regression comes back judged
+against that intent — `intentional`, `bug`, `noise`, or `needs_review`.
+
+```typescript
+const job = await rb
+  .test(process.env.VERCEL_PREVIEW_URL)
+  .forProject('marketing-site-v2')
+  .withContext({
+    changeDescription: 'Restyle the pricing table',
+    gitCommitSha: process.env.GITHUB_SHA,
+    prTitle: process.env.PR_TITLE,
+    expectedChanges: ['Pricing table background is now dark'],
+    scope: ['components/PricingTable.tsx'],
+  })
+  .run();
+
+await job.waitForCompletion(2000, undefined, { waitForSummaries: true });
+const summary = await job.getSummary();
+
+// Whole-job roll-up: does everything that changed line up with the stated intent?
+console.log(summary.intentAssessment?.summary);
+console.log(`Bugs: ${summary.intentAssessment?.bugCount}`);
+
+// Per-result verdict, plus the per-region verdicts behind it
+for (const r of summary.regressions) {
+  console.log(`${r.url}: ${r.verdict?.decision} (${r.verdict?.avgConfidence})`);
+}
+
+// Fail CI only on changes that were not intended
+const bugs = summary.regressions.filter(r => r.verdict?.decision === 'bug');
+if (bugs.length > 0) process.exit(1);
+```
+
+`runProject()` takes the same context, so a run from a saved project can be
+intent-aware too:
+
+```typescript
+const job = await rb.runProject('marketing-site-v2', {
+  testOrigin: process.env.VERCEL_PREVIEW_URL,
+  runContext: { changeDescription: 'Restyle the pricing table' },
+});
+```
+
+### Hiding Dynamic Content
+
+`.mask()` hides elements by selector. `.customCss()` injects arbitrary CSS before each
+screenshot when masking isn't enough — collapsing an animation, pinning a carousel, or
+neutralising a third-party widget. Max 4096 characters.
+
+```typescript
+const job = await rb
+  .test('https://preview.myapp.com')
+  .forProject('my-app-web')
+  .customCss(`
+    #chat-widget { display: none !important; }
+    * { animation: none !important; transition: none !important; }
+  `)
+  .run();
 ```
 
 ### Progress Tracking
@@ -177,6 +285,69 @@ const summary = await job.getSummary();
 console.log(`Score: ${summary.overallScore}/100`);
 ```
 
+### Environment Gates
+
+If an origin sits behind basic auth, a bypass header, or a session cookie, store the
+credential on the project. It is encrypted at rest and never returned — reads report
+only `{ configured: true }`.
+
+```typescript
+await rb.updateProject('marketing-site-v2', {
+  testAuth: { basic: { username: 'preview', password: process.env.PREVIEW_PASSWORD! } },
+  // or: { headers: { 'x-vercel-protection-bypass': token } }
+  // or: { cookies: [{ name: 'session', value: token }] }
+});
+
+const project = await rb.getProject('marketing-site-v2');
+console.log(project.testAuth); // { configured: true }
+
+// Clear it
+await rb.updateProject('marketing-site-v2', { testAuth: null });
+```
+
+Setting or clearing a gate credential invalidates the stored baselines, since it changes
+what the capture can reach.
+
+### Scheduled Checks
+
+A project can run unattended on a fixed cadence. Scheduling requires
+`baselinePolicy: 'rolling'` on a managed project — on the default `approved` policy an
+unapproved change would be re-reported on every subsequent run, so the API rejects the
+combination. Live-vs-live projects store no baseline and are exempt.
+
+```typescript
+// Turn on a daily unattended check
+await rb.updateProject('marketing-site-v2', {
+  baselinePolicy: 'rolling',
+  schedule: 'daily',   // 'hourly' | 'daily' | 'weekly'
+});
+
+// Or pin it to a UTC hour — this one runs at 03:00 UTC every day
+await rb.updateProject('marketing-site-v2', {
+  baselinePolicy: 'rolling',
+  schedule: 'daily',
+  scheduleHourUtc: 3,  // 0–23, UTC
+});
+
+// Turn it back off (this clears scheduleHourUtc too)
+await rb.updateProject('marketing-site-v2', { schedule: null });
+
+// Read back when the scheduler last fired — the next run is due one interval after this
+const project = await rb.getProject('marketing-site-v2');
+console.log(project.schedule, project.scheduleHourUtc, project.lastScheduledRunAt);
+```
+
+Without `scheduleHourUtc` the first run starts at the next hourly sweep and the cadence
+anchors to it. With it, the first run waits for that hour as well. Hours only, since the
+scheduler sweeps once an hour, and UTC only. It is rejected on an `hourly` schedule, and
+rejected on a project with no schedule to apply it to. Clearing the schedule clears the
+hour with it, and a missed slot waits for the next one rather than catching up.
+
+Setting a schedule, its hour, or a baseline policy does **not** invalidate
+baselines — only changes that affect what a capture looks like (`testOrigin`,
+`baseOrigin`, `sitemapUrl`, `paths`, `scans`, `devices`, `masks`, `customCss`) do that.
+Billing is per comparison, so cost scales with frequency.
+
 ### Reconnecting to an Existing Job
 
 If you have a job ID from a previous run (e.g., stored in CI state), you can attach to it without re-running the test:
@@ -208,6 +379,12 @@ npx @regressionbot/sdk https://example.com --project my-site --on "Desktop Chrom
 Test an entire site using glob patterns.
 ```bash
 npx @regressionbot/sdk https://example.com --project my-project --scan "/**" --exclude "/admin/**" --concurrency 20
+```
+
+Use `--mask` to hide elements by selector, or `--custom-css` to inject CSS before every
+screenshot:
+```bash
+npx @regressionbot/sdk https://example.com --project my-site --custom-css "#chat-widget { display: none !important; }"
 ```
 
 #### 3. Job Summary

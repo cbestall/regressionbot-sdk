@@ -1,8 +1,25 @@
 #!/usr/bin/env node
 import { RegressionBot } from './index';
 import { sanitizeFilename } from './security';
-import { JobStatus } from './types';
+import { JobStatus, PageResult } from './types';
 import * as path from 'path';
+
+function formatSummary(items: PageResult['regressionbotSummary']): string {
+    if (!items || items.length === 0) return '';
+    return items
+        .map(item => (item.label ? `[${item.label}] ${item.text}` : item.text))
+        .join('\n            ');
+}
+
+function printRegression(r: PageResult) {
+    console.log(`- ${r.url} [${r.variantName}] (Score: ${r.visualMatchScore.toFixed(2)})`);
+    console.log(`  Diff: ${r.diffUrl}`);
+    if (r.verdict) {
+        console.log(`  Verdict: ${r.verdict.decision} (confidence ${r.verdict.minConfidence.toFixed(2)}-${r.verdict.avgConfidence.toFixed(2)})`);
+    }
+    const summary = formatSummary(r.regressionbotSummary);
+    if (summary) console.log(`  Summary: ${summary}`);
+}
 
 function parseArgs(args: string[]) {
     const options: any = Object.create(null);
@@ -92,6 +109,7 @@ Options for <url>:
   --concurrency <n>    Max concurrent workers (default 10).
   --auto-approve       Automatically approve results as new baselines.
   --mask <selectors>   Comma-separated CSS selectors to hide (e.g. ".ad,#popup").
+  --custom-css <css>   CSS injected before each screenshot (max 4096 chars).
   --skip-summaries     Skip waiting for parallel AI summaries in the CLI.
 
 Environment Variables:
@@ -141,6 +159,10 @@ async function startJob(url: string, options: any) {
         builder.mask(selectors);
     }
 
+    if (typeof options['custom-css'] === 'string') {
+        builder.customCss(options['custom-css']);
+    }
+
     const job = await builder.run();
 
     console.log(`✅ Job started! ID: ${job.jobId}`);
@@ -177,11 +199,7 @@ Waiting for completion...
 
     if (summary.regressionCount > 0) {
         console.log('\n❌ Regressions found:');
-        summary.regressions.forEach((r: any) => {
-            console.log(`- ${r.url} [${r.variantName}] (Score: ${r.visualMatchScore.toFixed(2)})`);
-            console.log(`  Diff: ${r.diffUrl}`);
-            if (r.regressionbotSummary) console.log(`  Summary: ${r.regressionbotSummary}`);
-        });
+        summary.regressions.forEach(printRegression);
         console.log(`\nTo approve these changes, run:\n  npx regressionbot approve ${job.jobId}`);
         process.exit(1); 
     } else if (summary.errorCount > 0) {
@@ -217,11 +235,13 @@ Errors: ${summary.errorCount}
 
     if (summary.regressionCount > 0) {
         console.log('❌ Regressions found:');
-        for (const r of summary.regressions) {
-            console.log(`- ${r.url} [${r.variantName}] (Score: ${r.visualMatchScore.toFixed(2)})`);
-            console.log(`  Diff: ${r.diffUrl}`);
-            if (r.regressionbotSummary) console.log(`  Summary: ${r.regressionbotSummary}`);
-        }
+        summary.regressions.forEach(printRegression);
+    }
+
+    if (summary.intentAssessment) {
+        const ia = summary.intentAssessment;
+        console.log(`\n🧭 Intent: ${ia.summary}`);
+        console.log(`   bugs: ${ia.bugCount}, intentional: ${ia.intentionalCount}, noise: ${ia.noiseCount}, needs review: ${ia.needsReviewCount}`);
     }
 
     const doDownload = options.download || options['download-full'];

@@ -9,7 +9,19 @@ import {
     ProjectConfig,
     ProjectPath,
     ProjectScan,
-    JobAiSummary
+    JobAiSummary,
+    RegionVerdict,
+    ResultVerdict,
+    VerdictDecision,
+    RegressionbotSummaryItem,
+    RunContext,
+    IntentAssessment,
+    BaselinePolicy,
+    ProjectSchedule,
+    ProjectConfigUpdate,
+    EnvGate,
+    SummaryStatus,
+    ApproveResult
 } from './types';
 import {
     sanitizeFilename,
@@ -31,7 +43,19 @@ export type {
     ProjectConfig,
     ProjectPath,
     ProjectScan,
-    JobAiSummary
+    JobAiSummary,
+    RegionVerdict,
+    ResultVerdict,
+    VerdictDecision,
+    RegressionbotSummaryItem,
+    RunContext,
+    IntentAssessment,
+    BaselinePolicy,
+    ProjectSchedule,
+    ProjectConfigUpdate,
+    EnvGate,
+    SummaryStatus,
+    ApproveResult
 };
 
 export class RegressionBot {
@@ -97,8 +121,12 @@ export class RegressionBot {
             paths?: Array<{ path: string; label?: string }>;
             scans?: Array<{ pattern: string; options?: any }>;
             masks?: string[];
+            /** CSS injected before screenshotting. Max 4096 characters. */
+            customCss?: string;
             concurrency?: number;
             autoApprove?: boolean;
+            /** What this run is testing, used to judge whether changes were intended. */
+            runContext?: RunContext;
         } = {}
     ): Promise<JobHandle> {
         const res = await this._request<{ jobId: string }>(
@@ -111,16 +139,21 @@ export class RegressionBot {
 
     /**
      * Update the configuration settings for a named project.
+     *
+     * Changing anything that decides what a capture looks like invalidates the
+     * stored baselines — see {@link ProjectConfigUpdate}.
      */
     public async updateProject(
         projectName: string,
-        config: Partial<ProjectConfig>
+        config: ProjectConfigUpdate
     ): Promise<ProjectConfig> {
-        return this._request<ProjectConfig>(
+        // The API wraps the updated project in { message, project }.
+        const res = await this._request<{ message: string; project: ProjectConfig }>(
             `/project/${encodeURIComponent(projectName)}`,
             'PUT',
             config
         );
+        return res.project;
     }
 
 
@@ -158,6 +191,10 @@ export class JobBuilder {
         checks: Array<{ path: string, label?: string }>;
         scans: Array<{ pattern: string, options?: any }>;
         concurrency: number;
+        masks?: string[];
+        customCss?: string;
+        autoApprove?: boolean;
+        runContext?: RunContext;
     };
 
     constructor(sdk: RegressionBot, testOrigin: string) {
@@ -219,12 +256,31 @@ export class JobBuilder {
     }
 
     public autoApprove(val: boolean = true): this {
-        (this.manifest as any).autoApprove = val;
+        this.manifest.autoApprove = val;
         return this;
     }
 
     public mask(selectors: string[]): this {
-        (this.manifest as any).masks = selectors;
+        this.manifest.masks = selectors;
+        return this;
+    }
+
+    /**
+     * Inject custom CSS before each screenshot, e.g. to hide a dynamic widget:
+     * `'#chat-widget { display: none !important; }'`. Max 4096 characters.
+     */
+    public customCss(css: string): this {
+        this.manifest.customCss = css;
+        return this;
+    }
+
+    /**
+     * Describe what this run is testing — commit, PR, expected changes — so
+     * RegressionBot can judge whether each change was intentional.
+     * Merges with anything set by an earlier call.
+     */
+    public withContext(context: RunContext): this {
+        this.manifest.runContext = { ...this.manifest.runContext, ...context };
         return this;
     }
 
@@ -250,8 +306,10 @@ export class JobBuilder {
             paths: this.manifest.checks,
             scans: this.manifest.scans,
             concurrency: this.manifest.concurrency,
-            autoApprove: (this.manifest as any).autoApprove,
-            masks: (this.manifest as any).masks
+            autoApprove: this.manifest.autoApprove,
+            masks: this.manifest.masks,
+            customCss: this.manifest.customCss,
+            runContext: this.manifest.runContext
         };
 
         const res = await this.sdk._request<{ jobId: string }>('/crawl', 'POST', payload);
@@ -276,8 +334,8 @@ export class JobHandle {
         return this.sdk._request<JobSummary>(`/job/${encodeURIComponent(this.jobId)}/summary`);
     }
 
-    public async approve(): Promise<{ message: string; jobId: string; approvedUrlsCount: number; failedCount?: number }> {
-        return this.sdk._request('/approve', 'POST', { jobId: this.jobId });
+    public async approve(): Promise<ApproveResult> {
+        return this.sdk._request<ApproveResult>('/approve', 'POST', { jobId: this.jobId });
     }
 
     /**
