@@ -25,7 +25,7 @@ Unlike traditional visual diffing libraries, RegressionBot is designed for moder
 - **Auto-Discovery**: Scan sitemaps with glob patterns and limits.
 - **RegressionBot Summaries**: Plain-English change descriptions for every regression, generated on-demand via the API.
 - **Intent-Aware Verdicts**: Describe what a run is meant to change, and every regression comes back judged as intentional, a bug, or noise.
-- **Scheduled Checks**: Run a saved project unattended, hourly, daily, or weekly.
+- **Scheduled Checks**: Run a saved project unattended, hourly, daily, or weekly — and at a set UTC hour.
 - **Project-Based Baselines**: Save and reuse test configurations; share visual history across environments.
 - **Auto-Approval**: Automatically promote screenshots to baselines on jobs that pass your criteria.
 - **Zero Infrastructure**: No browser maintenance or server provisioning — RegressionBot handles it all.
@@ -35,6 +35,44 @@ Unlike traditional visual diffing libraries, RegressionBot is designed for moder
 ```bash
 npm install @regressionbot/sdk
 ```
+
+## Migration from 1.x
+
+2.0.0 re-types the SDK against what the API actually returns, taken from the
+orchestrator's implementation rather than from a spec that had drifted in both
+directions. Most of the breakage is caught by the compiler. One is not:
+
+```typescript
+// 1.x — updateProject() returned the raw { message, project } envelope,
+// so every field read off it was undefined at runtime
+const project = await rb.updateProject('site', { schedule: 'daily' });
+project.project.schedule;  // this is where the value actually was
+
+// 2.0 — the envelope is unwrapped for you
+const project = await rb.updateProject('site', { schedule: 'daily' });
+project.schedule;          // 'daily'
+```
+
+The rest surface as type errors:
+
+- **`PageResult.diffCount` is gone.** No endpoint ever returned it — both
+  `getJobStatus` and `getJobSummary` strip it. `PageResult` gains the fields they
+  do return: `status`, `isNewBaseline`, `errorMessage`, `elementsChanged`,
+  `domAssistSkipReason`, `maskUrl` and `verdict`. Image URLs are typed nullable,
+  which they always were.
+- **`updateProject()` takes `ProjectConfigUpdate`, not `Partial<ProjectConfig>`.**
+  The read and write shapes genuinely differ: a gate credential is written as an
+  `EnvGate` and read back only as `{ configured: true }`.
+- **`ProjectConfig.orgId` is gone** — the API stopped returning it.
+- **`summaryStatus` can be `FAILED`**, which the old union omitted. `error`,
+  `progress`, `results`, `createdAt` and `intentAssessment` are always returned.
+- **`approve()` gains `conflictedUrls`**, returned when another job updated a
+  baseline first.
+
+New in 2.0 and requiring a current API: `.customCss()` and `.withContext()` on
+the builder, intent-aware verdicts, environment gates, baseline policies, and
+scheduling. `scheduleHourUtc` needs API 2.7.0 or later — on an older API the
+field is accepted and ignored, and the schedule stays anchored to its first run.
 
 ## Usage
 
@@ -284,16 +322,28 @@ await rb.updateProject('marketing-site-v2', {
   schedule: 'daily',   // 'hourly' | 'daily' | 'weekly'
 });
 
-// Turn it back off
+// Or pin it to a UTC hour — this one runs at 03:00 UTC every day
+await rb.updateProject('marketing-site-v2', {
+  baselinePolicy: 'rolling',
+  schedule: 'daily',
+  scheduleHourUtc: 3,  // 0–23, UTC
+});
+
+// Turn it back off (this clears scheduleHourUtc too)
 await rb.updateProject('marketing-site-v2', { schedule: null });
 
 // Read back when the scheduler last fired — the next run is due one interval after this
 const project = await rb.getProject('marketing-site-v2');
-console.log(project.schedule, project.lastScheduledRunAt);
+console.log(project.schedule, project.scheduleHourUtc, project.lastScheduledRunAt);
 ```
 
-The first run starts at the next hourly sweep and the cadence anchors to it; there is no
-time-of-day setting. Setting a schedule or a baseline policy does **not** invalidate
+Without `scheduleHourUtc` the first run starts at the next hourly sweep and the cadence
+anchors to it. With it, the first run waits for that hour as well. Hours only, since the
+scheduler sweeps once an hour, and UTC only. It is rejected on an `hourly` schedule, and
+rejected on a project with no schedule to apply it to. Clearing the schedule clears the
+hour with it, and a missed slot waits for the next one rather than catching up.
+
+Setting a schedule, its hour, or a baseline policy does **not** invalidate
 baselines — only changes that affect what a capture looks like (`testOrigin`,
 `baseOrigin`, `sitemapUrl`, `paths`, `scans`, `devices`, `masks`, `customCss`) do that.
 Billing is per comparison, so cost scales with frequency.

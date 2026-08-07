@@ -63,6 +63,11 @@ export interface ProjectConfig {
     /** Set when the project runs unattended. Absent means it only runs when triggered. */
     schedule?: ProjectSchedule;
     /**
+     * The UTC hour, 0–23, at which a `daily` or `weekly` project runs — `3` is 03:00 UTC.
+     * Absent means the slot anchors to whenever the first sweep picked the project up.
+     */
+    scheduleHourUtc?: number;
+    /**
      * The API key recorded when the schedule was set; every scheduled run is attributed
      * to it. Absent if the schedule was set without an API key, in which case AI
      * summaries are skipped for those runs.
@@ -110,8 +115,26 @@ export interface ProjectConfigUpdate {
      * on a managed project — the API rejects the combination without it, because on the
      * approved policy an unapproved change is re-reported on every subsequent run.
      * Live-vs-live projects store no baseline and are exempt. Pass null to remove.
+     *
+     * Without `scheduleHourUtc` the first run starts at the next hourly sweep and the
+     * cadence anchors to it.
      */
     schedule?: ProjectSchedule | null;
+    /**
+     * Pin a `daily` or `weekly` schedule to this UTC hour, 0–23 — `3` means 03:00 UTC.
+     * The first run waits for the hour too, rather than firing immediately and settling
+     * into the hour from the following day. Hours only, because the scheduler sweeps once
+     * an hour; UTC only, because RegressionBot has no timezone to convert from.
+     *
+     * Rejected on an `hourly` schedule, which already runs every hour, and rejected if the
+     * project has no schedule to apply it to — either one already set, or one sent in the
+     * same update. Clearing the schedule with
+     * `schedule: null` clears this too, so re-enabling later cannot resurrect an hour
+     * nobody asked for on that run. Pass null to clear it on its own.
+     *
+     * A missed slot waits for the next one rather than catching up.
+     */
+    scheduleHourUtc?: number | null;
 }
 
 export interface VRConfig {

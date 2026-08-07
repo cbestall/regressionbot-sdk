@@ -442,6 +442,32 @@ async function testProjectMethods() {
     console.log('  OK: updateProject() sends schedule and baselinePolicy, and unwraps the response');
     restoreFetch();
 
+    // scheduleHourUtc pins the slot, and a 0 must survive the wire — it is 00:00 UTC, not absent
+    setMockFetch(async (url, options) => {
+        assert.deepStrictEqual(JSON.parse(options.body), { schedule: 'daily', scheduleHourUtc: 0 });
+        return {
+            ok: true,
+            json: async () => ({
+                message: 'ok',
+                project: { name: 'my-project', schedule: 'daily', scheduleHourUtc: 0 }
+            })
+        };
+    });
+    const pinned = await sdk.updateProject('my-project', { schedule: 'daily', scheduleHourUtc: 0 });
+    assert.strictEqual(pinned.scheduleHourUtc, 0, 'updateProject must read back the pinned hour');
+    restoreFetch();
+
+    setMockFetch(async (url, options) => {
+        assert.deepStrictEqual(JSON.parse(options.body), { scheduleHourUtc: null });
+        return {
+            ok: true,
+            json: async () => ({ message: 'ok', project: { name: 'my-project', schedule: 'daily' } })
+        };
+    });
+    await sdk.updateProject('my-project', { scheduleHourUtc: null });
+    console.log('  OK: updateProject() sends scheduleHourUtc, including hour 0 and a null to clear it');
+    restoreFetch();
+
     console.log('All Project tests passed!\n');
 }
 
