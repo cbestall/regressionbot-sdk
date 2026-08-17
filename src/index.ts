@@ -190,7 +190,11 @@ export class JobBuilder {
         variants: string[];
         checks: Array<{ path: string, label?: string }>;
         scans: Array<{ pattern: string, options?: any }>;
-        concurrency: number;
+        /**
+         * Left unset unless concurrency() is called. The API defaults to 4, and a value
+         * sent here is compared against the stored project config — see run().
+         */
+        concurrency?: number;
         masks?: string[];
         customCss?: string;
         autoApprove?: boolean;
@@ -204,8 +208,7 @@ export class JobBuilder {
             testOrigin: testOrigin.replace(/\/$/, ''),
             variants: [],
             checks: [],
-            scans: [],
-            concurrency: 10
+            scans: []
         };
     }
 
@@ -250,6 +253,11 @@ export class JobBuilder {
         return this;
     }
 
+    /**
+     * How many pages are captured in parallel, 1–20. Leave it unset to take the API's
+     * default of 4 — the ceiling is the site being captured, not RegressionBot, so
+     * raising it is a load decision about someone else's environment.
+     */
     public concurrency(n: number): this {
         this.manifest.concurrency = n;
         return this;
@@ -297,14 +305,18 @@ export class JobBuilder {
             this.manifest.checks.push({ path: '/', label: 'Home' });
         }
 
+        // Every field present here is compared against the saved project config, and a
+        // value that differs fails the run rather than overriding it. So a field the
+        // caller never set must stay absent: an empty `devices` or a `concurrency` this
+        // builder picked on its own would be read as an opinion and diffed.
         const payload = {
             project: this.manifest.projectId,
             testOrigin: this.manifest.testOrigin,
             sitemapUrl: this.manifest.sitemapUrl,
             baseOrigin: this.manifest.baseOrigin,
-            devices: this.manifest.variants,
+            devices: this.manifest.variants.length > 0 ? this.manifest.variants : undefined,
             paths: this.manifest.checks,
-            scans: this.manifest.scans,
+            scans: this.manifest.scans.length > 0 ? this.manifest.scans : undefined,
             concurrency: this.manifest.concurrency,
             autoApprove: this.manifest.autoApprove,
             masks: this.manifest.masks,

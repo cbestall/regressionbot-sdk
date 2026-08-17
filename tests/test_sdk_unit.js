@@ -84,8 +84,36 @@ async function testJobBuilderMethods() {
     const job = await builder.run();
     assert.strictEqual(job.jobId, 'job-123');
     console.log('  OK: run() returns JobHandle with correct jobId');
-    
+
     restoreFetch();
+
+    // A field the caller never set must not reach the wire. The API compares every
+    // parameter it receives against the saved project config and fails the run on a
+    // mismatch, so a default invented here rejects the job instead of overriding it.
+    console.log('  Testing run() omits parameters the caller never set...');
+    setMockFetch(async (url, options) => {
+        const body = JSON.parse(options.body);
+        assert.ok(!('concurrency' in body), 'concurrency must be absent unless concurrency() was called');
+        assert.ok(!('devices' in body), 'devices must be absent unless on() was called');
+        assert.ok(!('scans' in body), 'scans must be absent unless scan() was called');
+        // paths stays: the drift branch does not hydrate it, so an omitted paths would
+        // leave the run with nothing to capture.
+        assert.deepStrictEqual(body.paths, [{ path: '/', label: 'Home' }]);
+        return { ok: true, json: async () => ({ jobId: 'job-bare' }) };
+    });
+    await sdk.test('https://preview.example.com').forProject('test-project').run();
+    console.log('  OK: bare run() sends no invented defaults');
+    restoreFetch();
+
+    console.log('  Testing run() sends concurrency when asked...');
+    setMockFetch(async (url, options) => {
+        assert.strictEqual(JSON.parse(options.body).concurrency, 20);
+        return { ok: true, json: async () => ({ jobId: 'job-conc' }) };
+    });
+    await sdk.test('https://preview.example.com').forProject('test-project').concurrency(20).run();
+    console.log('  OK: concurrency() is sent when set');
+    restoreFetch();
+
     console.log('All JobBuilder tests passed!\n');
 }
 
