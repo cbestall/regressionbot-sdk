@@ -86,7 +86,8 @@ field is accepted and ignored, and the schedule stays anchored to its first run.
 - **CLI: `--concurrency` now rejects a missing or non-numeric value** instead of
   coercing it. `--concurrency` with no value used to run at 1, and a
   non-numeric one used to run at 10; both now fail with a message. Passing a
-  valid `1`–`20` is unchanged.
+  valid `1`–`20` is unchanged. Misuse exits **2**, so CI can tell a bad flag
+  from a run that worked and found regressions — both of which used to exit 1.
 - **`PageResult.maskUrl` is gone.** It was never on the public contract: both
   endpoints emit it to internal callers only, so code reading it was already
   getting `undefined` and nothing changes at runtime. It was listed here in

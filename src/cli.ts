@@ -21,6 +21,14 @@ function printRegression(r: PageResult) {
     if (summary) console.log(`  Summary: ${summary}`);
 }
 
+/**
+ * A mistake in how the command was invoked, rather than a run that worked and found
+ * something. Exits 2 so CI can tell the two apart — a pipeline that treats "regressions
+ * found" as a real result but "bad flag" as a broken job could not distinguish them when
+ * both exited 1.
+ */
+class UsageError extends Error {}
+
 function parseArgs(args: string[]) {
     const options: any = Object.create(null);
     options._ = [];
@@ -83,7 +91,7 @@ async function main() {
     } catch (error: any) {
         console.error(`
 Error: ${error.message}`);
-        process.exit(1);
+        process.exit(error instanceof UsageError ? 2 : 1);
     }
 }
 
@@ -115,6 +123,11 @@ Options for <url>:
 Environment Variables:
   REGRESSIONBOT_API_KEY   Override the API Key.
   REGRESSIONBOT_API_URL   Override the API URL.
+
+Exit codes:
+  0  No regressions.
+  1  Regressions or capture errors found, or the run failed.
+  2  The command was used incorrectly (bad flag or missing argument).
 `);
 }
 
@@ -135,7 +148,7 @@ async function startJob(url: string, options: any) {
     if (options.concurrency !== undefined) {
         const n = typeof options.concurrency === 'string' ? Number(options.concurrency) : NaN;
         if (!Number.isInteger(n) || n < 1 || n > 20) {
-            throw new Error('--concurrency takes a whole number from 1 to 20.');
+            throw new UsageError('--concurrency takes a whole number from 1 to 20.');
         }
         builder.concurrency(n);
     }
