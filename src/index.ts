@@ -21,7 +21,11 @@ import {
     ProjectConfigUpdate,
     EnvGate,
     SummaryStatus,
-    ApproveResult
+    ApproveResult,
+    Change,
+    ChangeType,
+    StyleDelta,
+    ChangeBox
 } from './types';
 import {
     sanitizeFilename,
@@ -55,7 +59,11 @@ export type {
     ProjectConfigUpdate,
     EnvGate,
     SummaryStatus,
-    ApproveResult
+    ApproveResult,
+    Change,
+    ChangeType,
+    StyleDelta,
+    ChangeBox
 };
 
 export class RegressionBot {

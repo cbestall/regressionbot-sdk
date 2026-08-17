@@ -88,8 +88,11 @@ field is accepted and ignored, and the schedule stays anchored to its first run.
   non-numeric one used to run at 10; both now fail with a message. Passing a
   valid `1`–`20` is unchanged.
 - **`PageResult.maskUrl` is gone.** It was never on the public contract: both
-  endpoints emit it to internal callers only. It was listed here in 2.0.0 by
-  mistake.
+  endpoints emit it to internal callers only, so code reading it was already
+  getting `undefined` and nothing changes at runtime. It was listed here in
+  2.0.0 by mistake. There is no public replacement — the mask is a transparent
+  overlay built for the dashboard, and `diffUrl` is the annotated diff image you
+  want instead.
 - **`PageResult.changed` added**, with `contentChanged` alongside it. This is the
   rule the API uses to split `regressions` from `matches`. Read it instead of
   testing `diffPercentage === 0` — a text edit that moves no pixels is a
@@ -190,6 +193,45 @@ if (summary.regressions.length > 0) {
 // Or trigger RegressionBot summary generation on-demand for a completed job:
 const aiResult = await job.generateAiSummary();
 console.log(`Generated summaries for ${aiResult.summaries.length} regressions.`);
+```
+
+### Reading exactly what changed
+
+`changes` is computed by diffing the two documents, so unlike the prose summary it is
+measured rather than described — you can quote it directly.
+
+```typescript
+for (const r of summary.regressions) {
+  for (const c of r.changes ?? []) {
+    switch (c.type) {
+      case 'text-edit':
+        console.log(`${c.element}: "${c.before}" → "${c.after}"`);
+        break;
+      case 'style-only':
+        for (const [prop, [from, to]] of Object.entries(c.style ?? {})) {
+          console.log(`${c.element}: ${prop} ${from} → ${to}`);
+        }
+        break;
+      default:
+        console.log(`${c.type} on ${c.element}`);
+    }
+  }
+}
+```
+
+Two things to know before you rely on it:
+
+- **It can be truncated.** At most 40 changes per page, and fewer if they would exceed the
+  API's 8 KB budget for the field. Treat it as the most significant changes, not a
+  guaranteed-complete list.
+- **`changes` absent is not "nothing changed".** It means the document comparison could not
+  run on that page — check `domAssistSkipReason`.
+
+`box` gives you the location in the capture, in CSS pixels from the top-left of the
+full-page image, so it indexes straight into `currentUrl` if you want to crop:
+
+```typescript
+const aboveTheFold = r.changes?.filter(c => c.box && c.box.y < 800) ?? [];
 ```
 
 ### Intent-Aware Verdicts

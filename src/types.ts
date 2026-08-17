@@ -191,24 +191,70 @@ export interface ResultVerdict {
 }
 
 /**
+ * The kinds of change the document diff reports.
+ *
+ * `move` and `move-with-edit` are distinguished because an element that only shifted is
+ * usually a knock-on effect, while one that shifted *and* changed is usually the cause.
+ * `sticky-reposition` is a move of a positioned element, and `reflow-displacement` is
+ * content pushed by a change elsewhere — both are consequences, not edits.
+ */
+export type ChangeType =
+    | 'text-edit'
+    | 'insert'
+    | 'delete'
+    | 'style-only'
+    | 'image-change'
+    | 'move'
+    | 'move-with-edit'
+    | 'sticky-reposition'
+    | 'reflow-displacement';
+
+/** One changed CSS property, as `[from, to]`. */
+export type StyleDelta = [from: string, to: string];
+
+/** A rectangle in the capture, in CSS pixels. See {@link Change.box}. */
+export interface ChangeBox {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+/**
  * One change on a page, computed by diffing the two documents rather than described by a
  * model. This is the exact answer to "what changed" — read it before the prose summary.
  */
 export interface Change {
-    /** text-edit, insert, delete, move-with-edit, style-only. */
-    type: string;
-    /** Tag name of the element that changed. */
+    type: ChangeType;
+    /**
+     * Tag name only, lowercase, e.g. `div` — not a CSS selector and not unique on the page.
+     * For something you can query with, see `PageResult.elementsChanged`.
+     */
     element: string;
     /** The text before the edit. Absent on an insert. */
     before?: string;
     /** The text after the edit. Absent on a delete. */
     after?: string;
-    /** Changed computed styles, as property -> [from, to]. */
-    style?: Record<string, [string, string]>;
-    /** Where it sits in the current capture, in capture pixels. Absent on a delete. */
-    box?: { x: number; y: number; w: number; h: number };
-    /** Where it was in the baseline, present only when it differs from `box`. */
-    boxBefore?: { x: number; y: number; w: number; h: number };
+    /** Changed computed styles, keyed by CSS property name. */
+    style?: Record<string, StyleDelta>;
+    /**
+     * Where it sits in the current capture.
+     *
+     * CSS pixels, which equal image pixels here because captures pin `deviceScaleFactor`
+     * to 1, and measured from the top-left of the **full-page** capture rather than the
+     * viewport — so it indexes straight into `currentUrl` with no scroll offset to add.
+     *
+     * Absent on a delete, and absent whenever the element's position cannot be trusted:
+     * an out-of-flow element reports a viewport-relative rect that would point at empty
+     * space in a full-page image, so the box is omitted rather than sent wrong.
+     */
+    box?: ChangeBox;
+    /**
+     * Where it was in the baseline, in the same coordinate space, present only when it
+     * differs from `box` in position or size. Subtract for the move vector
+     * (`box.x - boxBefore.x`); compare `w`/`h` for a resize.
+     */
+    boxBefore?: ChangeBox;
 }
 
 export interface RegressionbotSummaryItem {
@@ -236,6 +282,11 @@ export interface PageResult {
      * Whether this page is considered changed. Read this rather than deriving it from
      * `diffPercentage` — it is the same rule the API uses to split `regressions` from
      * `matches`, and a text edit that moved no pixels is changed at 0.00%.
+     *
+     * Required, not optional: both endpoints compute it on every result rather than
+     * copying it from storage, so it cannot be missing from a response. The SDK targets
+     * the hosted API at api.regressionbot.com, so there is no older deployment that
+     * could omit it.
      */
     changed: boolean;
     /**
@@ -269,7 +320,9 @@ export interface PageResult {
      * Prefer this over `regressionbotSummary`: it is measured rather than described, so it
      * carries no confidence and can be quoted directly.
      *
-     * Capped at 40 per page — a page at the cap has more changes than are listed here.
+     * Truncated on a busy page: at most 40 changes, and fewer if they would exceed the
+     * API's 8 KB budget for this field. Treat the list as the most significant changes,
+     * not necessarily all of them.
      */
     changes?: Change[];
     /** Selectors of the elements that changed, when the DOM comparison could identify them. */
