@@ -545,8 +545,61 @@ async function testProjectMethods() {
     console.log('All Project tests passed!\n');
 }
 
+async function testCliHelpers() {
+    console.log('Testing CLI helpers...');
+    const { parseArgs, parseFailOn, isBlocking, buildRunContext } = require('../dist/cli');
+
+    // A CSS custom property starts with '--', so the space-separated form cannot carry it:
+    // the value is indistinguishable from the next flag. --key=value is the escape hatch.
+    console.log('  Testing --key=value parsing...');
+    const eq = parseArgs(['--custom-css=--brand: red; color: blue', '--project', 'p']);
+    assert.strictEqual(eq['custom-css'], '--brand: red; color: blue');
+    assert.strictEqual(eq.project, 'p');
+
+    // The old behaviour, kept: a space-separated value that starts with '--' is lost.
+    const spaced = parseArgs(['--custom-css', '--brand: red']);
+    assert.strictEqual(spaced['custom-css'], true, 'space-separated form still cannot carry a -- value');
+
+    assert.strictEqual(parseArgs(['--a=1=2']).a, '1=2', 'splits on the first = only');
+    assert.deepStrictEqual(parseArgs(['run', '--x']), Object.assign(Object.create(null), { _: ['run'], x: true }));
+    console.log('  OK: --key=value parses, including values starting with --');
+
+    console.log('  Testing prototype pollution guards...');
+    assert.strictEqual(parseArgs(['--__proto__=polluted']).polluted, undefined);
+    assert.strictEqual(({}).polluted, undefined, 'Object.prototype must be untouched');
+    assert.strictEqual(parseArgs(['--constructor=x']).constructor, undefined, 'constructor must not be set');
+    assert.strictEqual(parseArgs(['--__proto__', 'v', '--project', 'p']).project, 'p', 'blocked key still consumes its value');
+    console.log('  OK: blocked keys are dropped in both forms');
+
+    console.log('  Testing --fail-on...');
+    assert.strictEqual(parseFailOn(undefined), 'any');
+    assert.strictEqual(parseFailOn('unintended'), 'unintended');
+    assert.throws(() => parseFailOn('sometimes'), /--fail-on takes/);
+    assert.throws(() => parseFailOn(true), /--fail-on takes/);
+
+    // An unjudged regression must block: nothing decided it was wanted, and passing it
+    // would turn a missing verdict into a silent green build.
+    assert.strictEqual(isBlocking({}), true, 'no verdict blocks');
+    assert.strictEqual(isBlocking({ verdict: { decision: 'bug' } }), true);
+    assert.strictEqual(isBlocking({ verdict: { decision: 'needs_review' } }), true);
+    assert.strictEqual(isBlocking({ verdict: { decision: 'intentional' } }), false);
+    assert.strictEqual(isBlocking({ verdict: { decision: 'noise' } }), false);
+    console.log('  OK: only bugs, needs-review and unjudged changes block');
+
+    console.log('  Testing intent flags...');
+    assert.strictEqual(buildRunContext({}), undefined, 'no intent flags means no runContext');
+    assert.deepStrictEqual(
+        buildRunContext({ 'change-description': 'restyle pricing', 'expected-changes': 'darker table, new font ', commit: 'abc123' }),
+        { changeDescription: 'restyle pricing', gitCommitSha: 'abc123', expectedChanges: ['darker table', 'new font'] }
+    );
+    console.log('  OK: intent flags build a runContext');
+
+    console.log('All CLI helper tests passed!\n');
+}
+
 async function runAllTests() {
     try {
+        await testCliHelpers();
         await testJobBuilderMethods();
         await testJobHandleMethods();
         await testDownloadResults();

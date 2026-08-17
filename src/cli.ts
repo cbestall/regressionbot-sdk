@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { RegressionBot } from './index';
 import { sanitizeFilename } from './security';
-import { JobStatus, PageResult } from './types';
+import { JobStatus, JobSummary, PageResult, RunContext } from './types';
 import * as path from 'path';
 
 function formatSummary(items: PageResult['regressionbotSummary']): string {
@@ -29,30 +29,85 @@ function printRegression(r: PageResult) {
  */
 class UsageError extends Error {}
 
+function printIntent(summary: JobSummary) {
+    const ia = summary.intentAssessment;
+    if (!ia || !ia.intentProvided) return;
+    console.log(`\n🧭 Intent: ${ia.summary}`);
+    console.log(`   bugs: ${ia.bugCount}, intentional: ${ia.intentionalCount}, noise: ${ia.noiseCount}, needs review: ${ia.needsReviewCount}`);
+}
+
+type FailOn = 'any' | 'unintended';
+
+function parseFailOn(raw: unknown): FailOn {
+    if (raw === undefined) return 'any';
+    if (raw === 'any' || raw === 'unintended') return raw;
+    throw new UsageError("--fail-on takes 'any' or 'unintended'.");
+}
+
+/**
+ * Whether one regression should fail the build under `--fail-on unintended`.
+ *
+ * A regression with no verdict always blocks. Nothing judged it — the run carried no
+ * intent, or the summary pass had not finished — and treating unjudged as wanted would
+ * turn a missing verdict into a silent pass, which is the one outcome a regression
+ * detector must never produce.
+ */
+function isBlocking(r: PageResult): boolean {
+    if (!r.verdict) return true;
+    return r.verdict.decision === 'bug' || r.verdict.decision === 'needs_review';
+}
+
+function buildRunContext(options: any): RunContext | undefined {
+    const context: RunContext = {};
+    if (typeof options['change-description'] === 'string') context.changeDescription = options['change-description'];
+    if (typeof options['pr-title'] === 'string') context.prTitle = options['pr-title'];
+    if (typeof options.commit === 'string') context.gitCommitSha = options.commit;
+    if (typeof options['expected-changes'] === 'string') {
+        const expected = options['expected-changes'].split(',').map((s: string) => s.trim()).filter(Boolean);
+        if (expected.length > 0) context.expectedChanges = expected;
+    }
+    return Object.keys(context).length > 0 ? context : undefined;
+}
+
+// 🛡️ SECURITY: never let an argument name reach Object.prototype.
+const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function parseArgs(args: string[]) {
     const options: any = Object.create(null);
     options._ = [];
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
-        if (arg.startsWith('--')) {
-            const key = arg.slice(2);
 
-            // Prevent prototype pollution
-            if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-                const value = args[i + 1];
-                if (value && !value.startsWith('--')) i++;
-                continue;
-            }
-
-            const value = args[i + 1];
-            if (value && !value.startsWith('--')) {
-                options[key] = value;
-                i++;
-            } else {
-                options[key] = true;
-            }
-        } else {
+        if (!arg.startsWith('--')) {
             options._.push(arg);
+            continue;
+        }
+
+        const body = arg.slice(2);
+        const eq = body.indexOf('=');
+
+        // --key=value carries its own value, so the value survives even when it starts
+        // with '--'. That is the only way to pass CSS custom properties:
+        // `--custom-css="--brand: red"` loses its value in the space-separated form,
+        // because a leading '--' is indistinguishable from the next flag.
+        if (eq !== -1) {
+            const key = body.slice(0, eq);
+            if (!BLOCKED_KEYS.has(key)) options[key] = body.slice(eq + 1);
+            continue;
+        }
+
+        if (BLOCKED_KEYS.has(body)) {
+            const value = args[i + 1];
+            if (value && !value.startsWith('--')) i++;
+            continue;
+        }
+
+        const value = args[i + 1];
+        if (value && !value.startsWith('--')) {
+            options[body] = value;
+            i++;
+        } else {
+            options[body] = true;
         }
     }
     return options;
@@ -118,14 +173,30 @@ Options for <url>:
   --auto-approve       Automatically approve results as new baselines.
   --mask <selectors>   Comma-separated CSS selectors to hide (e.g. ".ad,#popup").
   --custom-css <css>   CSS injected before each screenshot (max 4096 chars).
+                       Use --custom-css="..." if the CSS starts with '--'.
   --skip-summaries     Skip waiting for parallel AI summaries in the CLI.
+
+Describing the change (lets each regression be judged against your intent):
+  --change-description <text>   What this run is meant to change.
+  --expected-changes <list>     Comma-separated list of expected changes.
+  --pr-title <text>             PR title.
+  --commit <sha>                Git commit SHA.
+
+  --fail-on <mode>     What counts as a failure. 'any' (default) fails on any
+                       regression. 'unintended' fails only on changes judged a
+                       bug or needing review, so expected changes keep the build
+                       green. Needs --change-description; anything unjudged
+                       still fails.
+
+Note: any flag can be written --flag=value, which is required when the value
+itself starts with '--'.
 
 Environment Variables:
   REGRESSIONBOT_API_KEY   Override the API Key.
   REGRESSIONBOT_API_URL   Override the API URL.
 
 Exit codes:
-  0  No regressions.
+  0  Nothing failed (see --fail-on).
   1  Regressions or capture errors found, or the run failed.
   2  The command was used incorrectly (bad flag or missing argument).
 `);
@@ -135,6 +206,7 @@ async function startJob(url: string, options: any) {
     console.log(`🚀 Initializing visual test...`);
     
     const projectId = options.project;
+    const failOn = parseFailOn(options['fail-on']);
 
     const builder = sdk.test(url);
 
@@ -188,6 +260,18 @@ async function startJob(url: string, options: any) {
         builder.customCss(options['custom-css']);
     }
 
+    const runContext = buildRunContext(options);
+    if (runContext) {
+        builder.withContext(runContext);
+    }
+
+    if (failOn === 'unintended' && !runContext) {
+        console.log('⚠️  --fail-on unintended needs intent to judge against. Pass --change-description (see --help).');
+    }
+    if (failOn === 'unintended' && options['skip-summaries']) {
+        console.log('⚠️  --skip-summaries leaves every change unjudged, so --fail-on unintended cannot excuse any of them.');
+    }
+
     const job = await builder.run();
 
     console.log(`✅ Job started! ID: ${job.jobId}`);
@@ -222,20 +306,47 @@ Waiting for completion...
         });
     }
 
+    let exitCode = 0;
+
     if (summary.regressionCount > 0) {
         console.log('\n❌ Regressions found:');
         summary.regressions.forEach(printRegression);
-        console.log(`\nTo approve these changes, run:\n  npx regressionbot approve ${job.jobId}`);
-        process.exit(1); 
-    } else if (summary.errorCount > 0) {
+
+        const blocking = failOn === 'any'
+            ? summary.regressions
+            : summary.regressions.filter(isBlocking);
+
+        const excused = summary.regressionCount - blocking.length;
+        if (excused > 0) {
+            console.log(`\n✅ ${excused} of ${summary.regressionCount} matched the stated intent and did not fail the build.`);
+        }
+
+        if (blocking.length > 0) {
+            console.log(`\nTo approve these changes, run:\n  npx regressionbot approve ${job.jobId}`);
+            exitCode = 1;
+        }
+    }
+
+    printIntent(summary);
+
+    // Reported even when there are regressions. These used to be hidden behind an
+    // else-if, so a run with both showed only the regressions and exited 1 for what
+    // looked like the wrong reason.
+    if (summary.errorCount > 0) {
         console.log('\n⚠️ Errors encountered:');
         summary.errors.forEach((e: any) => {
             console.log(`- ${e.url}: ${e.errorMessage}`);
         });
-        process.exit(1);
-    } else {
-        console.log('\n✨ No regressions found. All good!');
+        exitCode = 1;
     }
+
+    if (exitCode !== 0) {
+        process.exit(exitCode);
+    }
+
+    console.log(summary.regressionCount > 0
+        ? '\n✨ Every change was intended. All good!'
+        : '\n✨ No regressions found. All good!');
 }
 
 async function checkStatus(jobId: string) {
@@ -263,11 +374,7 @@ Errors: ${summary.errorCount}
         summary.regressions.forEach(printRegression);
     }
 
-    if (summary.intentAssessment) {
-        const ia = summary.intentAssessment;
-        console.log(`\n🧭 Intent: ${ia.summary}`);
-        console.log(`   bugs: ${ia.bugCount}, intentional: ${ia.intentionalCount}, noise: ${ia.noiseCount}, needs review: ${ia.needsReviewCount}`);
-    }
+    printIntent(summary);
 
     const doDownload = options.download || options['download-full'];
     if (doDownload) {
@@ -293,4 +400,10 @@ async function approveJob(jobId: string) {
     console.log(`Success! ${res.message}`);
 }
 
-main();
+// Only run when invoked as a command, so the pure helpers below can be imported and
+// tested without the CLI executing on require.
+if (require.main === module) {
+    main();
+}
+
+export { parseArgs, parseFailOn, isBlocking, buildRunContext };
