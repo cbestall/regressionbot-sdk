@@ -50,8 +50,9 @@ export interface ProjectConfig {
     testAuth?: { configured: true };
     /** Presence flag only — the stored credential is never returned. */
     baseAuth?: { configured: true };
+    /** Pages captured in parallel, 1–20. Absent means the API's default of 4. */
     concurrency?: number;
-    /** Extra instructions handed to the model that writes change summaries. */
+    /** Extra instructions handed to the model that writes change summaries. Max 1000 characters. */
     aiPromptInstructions?: string;
     /** Diff percentage below which a regression is skipped by the AI pass. Defaults to 0.01. */
     aiSummaryThreshold?: number;
@@ -106,7 +107,12 @@ export interface ProjectConfigUpdate {
     testAuth?: EnvGate | null;
     /** Credentials for the base origin's environment gate. Pass null to clear. */
     baseAuth?: EnvGate | null;
+    /**
+     * Pages captured in parallel, 1–20. Rejected outside that range. Leave it unset to
+     * take the API's default of 4 — the load lands on the site being captured.
+     */
     concurrency?: number;
+    /** Max 1000 characters. */
     aiPromptInstructions?: string;
     aiSummaryThreshold?: number;
     baselinePolicy?: BaselinePolicy;
@@ -171,6 +177,84 @@ export interface ResultVerdict {
     avgConfidence: number;
     /** Keyed by region label (A, B, C…). Empty when the verdict came from the text-only pass. */
     regions: Record<string, RegionVerdict>;
+    /**
+     * What the judgement was made from.
+     *
+     * `measured` — the exact edits from the document diff were in front of the model.
+     * `described` — only a generated sentence about the change was, because the DOM engine
+     * could not run on that page. Absent on the vision path, which reads the images.
+     *
+     * Worth more than the confidence numbers when deciding how much weight to give a
+     * verdict: a `described` one was reached without seeing what actually changed.
+     */
+    basis?: 'measured' | 'described';
+}
+
+/**
+ * The kinds of change the document diff reports.
+ *
+ * `move` and `move-with-edit` are distinguished because an element that only shifted is
+ * usually a knock-on effect, while one that shifted *and* changed is usually the cause.
+ * `sticky-reposition` is a move of a positioned element, and `reflow-displacement` is
+ * content pushed by a change elsewhere — both are consequences, not edits.
+ */
+export type ChangeType =
+    | 'text-edit'
+    | 'insert'
+    | 'delete'
+    | 'style-only'
+    | 'image-change'
+    | 'move'
+    | 'move-with-edit'
+    | 'sticky-reposition'
+    | 'reflow-displacement';
+
+/** One changed CSS property, as `[from, to]`. */
+export type StyleDelta = [from: string, to: string];
+
+/** A rectangle in the capture, in CSS pixels. See {@link Change.box}. */
+export interface ChangeBox {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+/**
+ * One change on a page, computed by diffing the two documents rather than described by a
+ * model. This is the exact answer to "what changed" — read it before the prose summary.
+ */
+export interface Change {
+    type: ChangeType;
+    /**
+     * Tag name only, lowercase, e.g. `div` — not a CSS selector and not unique on the page.
+     * For something you can query with, see `PageResult.elementsChanged`.
+     */
+    element: string;
+    /** The text before the edit. Absent on an insert. */
+    before?: string;
+    /** The text after the edit. Absent on a delete. */
+    after?: string;
+    /** Changed computed styles, keyed by CSS property name. */
+    style?: Record<string, StyleDelta>;
+    /**
+     * Where it sits in the current capture.
+     *
+     * CSS pixels, which equal image pixels here because captures pin `deviceScaleFactor`
+     * to 1, and measured from the top-left of the **full-page** capture rather than the
+     * viewport — so it indexes straight into `currentUrl` with no scroll offset to add.
+     *
+     * Absent on a delete, and absent whenever the element's position cannot be trusted:
+     * an out-of-flow element reports a viewport-relative rect that would point at empty
+     * space in a full-page image, so the box is omitted rather than sent wrong.
+     */
+    box?: ChangeBox;
+    /**
+     * Where it was in the baseline, in the same coordinate space, present only when it
+     * differs from `box` in position or size. Subtract for the move vector
+     * (`box.x - boxBefore.x`); compare `w`/`h` for a resize.
+     */
+    boxBefore?: ChangeBox;
 }
 
 export interface RegressionbotSummaryItem {
@@ -194,7 +278,26 @@ export interface PageResult {
     status: 'SUCCESS' | 'ERROR';
     /** Device variant tested (e.g. "Desktop Chrome", "iPhone 12"). */
     variantName: string;
-    /** Percentage of pixels that differed from the baseline (0 = identical). */
+    /**
+     * Whether this page is considered changed. Read this rather than deriving it from
+     * `diffPercentage` — it is the same rule the API uses to split `regressions` from
+     * `matches`, and a text edit that moved no pixels is changed at 0.00%.
+     *
+     * Required, not optional: both endpoints compute it on every result rather than
+     * copying it from storage, so it cannot be missing from a response. The SDK targets
+     * the hosted API at api.regressionbot.com, so there is no older deployment that
+     * could omit it.
+     */
+    changed: boolean;
+    /**
+     * Set when the document diff found a content change. Present only when true, and the
+     * reason a page can be `changed` at a `diffPercentage` of 0.
+     */
+    contentChanged?: true;
+    /**
+     * Percentage of pixels that differed from the baseline. Not a change test on its own:
+     * 0 does not mean identical — see `changed`.
+     */
     diffPercentage: number;
     /** Perceptual similarity 0-100 (SSIM). */
     visualMatchScore: number;
@@ -209,6 +312,19 @@ export interface PageResult {
      * the run carried a {@link RunContext}, and only once summaryStatus is COMPLETE.
      */
     verdict?: ResultVerdict;
+    /**
+     * The exact edits the engine computed from the two documents — element, text before,
+     * text after, changed styles. Absent when the DOM comparison could not run on the page,
+     * which is not the same as nothing having changed.
+     *
+     * Prefer this over `regressionbotSummary`: it is measured rather than described, so it
+     * carries no confidence and can be quoted directly.
+     *
+     * Truncated on a busy page: at most 40 changes, and fewer if they would exceed the
+     * API's 8 KB budget for this field. Treat the list as the most significant changes,
+     * not necessarily all of them.
+     */
+    changes?: Change[];
     /** Selectors of the elements that changed, when the DOM comparison could identify them. */
     elementsChanged?: string[];
     /**
@@ -223,11 +339,6 @@ export interface PageResult {
     currentUrl: string | null;
     /** Pre-signed URL for the side-by-side annotated diff image. */
     diffUrl: string | null;
-    /**
-     * Pre-signed URL for the diff mask. getStatus() always sends the key, null when
-     * there is no mask; getSummary() omits it entirely in that case.
-     */
-    maskUrl?: string | null;
 }
 
 export interface JobProgress {

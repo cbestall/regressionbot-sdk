@@ -8,18 +8,26 @@ function formatSummary(items: PageResult['regressionbotSummary']): string {
     if (!items || items.length === 0) return '';
     return items
         .map(item => (item.label ? `[${item.label}] ${item.text}` : item.text))
-        .join('\n            ');
+        .join('\n           ');
 }
 
 function printRegression(r: PageResult) {
     console.log(`- ${r.url} [${r.variantName}] (Score: ${r.visualMatchScore.toFixed(2)})`);
-    console.log(`  Diff: ${r.diffUrl}`);
+    if (r.diffUrl) console.log(`  Diff: ${r.diffUrl}`);
     if (r.verdict) {
         console.log(`  Verdict: ${r.verdict.decision} (confidence ${r.verdict.minConfidence.toFixed(2)}-${r.verdict.avgConfidence.toFixed(2)})`);
     }
     const summary = formatSummary(r.regressionbotSummary);
     if (summary) console.log(`  Summary: ${summary}`);
 }
+
+/**
+ * A mistake in how the command was invoked, rather than a run that worked and found
+ * something. Exits 2 so CI can tell the two apart — a pipeline that treats "regressions
+ * found" as a real result but "bad flag" as a broken job could not distinguish them when
+ * both exited 1.
+ */
+class UsageError extends Error {}
 
 function parseArgs(args: string[]) {
     const options: any = Object.create(null);
@@ -83,7 +91,7 @@ async function main() {
     } catch (error: any) {
         console.error(`
 Error: ${error.message}`);
-        process.exit(1);
+        process.exit(error instanceof UsageError ? 2 : 1);
     }
 }
 
@@ -106,7 +114,7 @@ Options for <url>:
   --on <devices>       Comma-separated device names (e.g. "Desktop Chrome,iPhone 12").
   --scan <pattern>     Glob pattern to scan in sitemap (e.g. "/blog/**").
   --exclude <patterns> Comma-separated glob patterns to exclude.
-  --concurrency <n>    Max concurrent workers (default 10).
+  --concurrency <n>    Pages captured in parallel, 1-20 (default 4).
   --auto-approve       Automatically approve results as new baselines.
   --mask <selectors>   Comma-separated CSS selectors to hide (e.g. ".ad,#popup").
   --custom-css <css>   CSS injected before each screenshot (max 4096 chars).
@@ -115,6 +123,11 @@ Options for <url>:
 Environment Variables:
   REGRESSIONBOT_API_KEY   Override the API Key.
   REGRESSIONBOT_API_URL   Override the API URL.
+
+Exit codes:
+  0  No regressions.
+  1  Regressions or capture errors found, or the run failed.
+  2  The command was used incorrectly (bad flag or missing argument).
 `);
 }
 
@@ -122,11 +135,23 @@ async function startJob(url: string, options: any) {
     console.log(`🚀 Initializing visual test...`);
     
     const projectId = options.project;
-    const devices = options.on ? options.on.split(',').map((s: string) => s.trim()) : ['Desktop Chrome'];
-    
-    const builder = sdk.test(url)
-        .on(devices)
-        .concurrency(Number(options.concurrency) || 10);
+
+    const builder = sdk.test(url);
+
+    // Only set what the caller actually asked for. Anything sent here is compared against
+    // the saved project config, so a default invented by the CLI fails the run instead of
+    // being overridden by it.
+    if (typeof options.on === 'string') {
+        builder.on(options.on.split(',').map((s: string) => s.trim()).filter(Boolean));
+    }
+
+    if (options.concurrency !== undefined) {
+        const n = typeof options.concurrency === 'string' ? Number(options.concurrency) : NaN;
+        if (!Number.isInteger(n) || n < 1 || n > 20) {
+            throw new UsageError('--concurrency takes a whole number from 1 to 20.');
+        }
+        builder.concurrency(n);
+    }
 
     if (projectId) {
         builder.forProject(projectId);
@@ -167,7 +192,7 @@ async function startJob(url: string, options: any) {
 
     console.log(`✅ Job started! ID: ${job.jobId}`);
     console.log(`📊 Project: ${projectId}`);
-    console.log(`📱 Matrix: ${devices.join(', ')}`);
+    console.log(`📱 Matrix: ${typeof options.on === 'string' ? options.on : 'Desktop Chrome (default)'}`);
     if (options.scan) {
         console.log(`🔍 Scan: ${options.scan} (Exclude: ${options.exclude || 'none'})`);
     }

@@ -84,8 +84,82 @@ async function testJobBuilderMethods() {
     const job = await builder.run();
     assert.strictEqual(job.jobId, 'job-123');
     console.log('  OK: run() returns JobHandle with correct jobId');
-    
+
     restoreFetch();
+
+    // A field the caller never set must not reach the wire. The API compares every
+    // parameter it receives against the saved project config and fails the run on a
+    // mismatch, so a default invented here rejects the job instead of overriding it.
+    console.log('  Testing run() omits parameters the caller never set...');
+    setMockFetch(async (url, options) => {
+        const body = JSON.parse(options.body);
+        assert.ok(!('concurrency' in body), 'concurrency must be absent unless concurrency() was called');
+        assert.ok(!('devices' in body), 'devices must be absent unless on() was called');
+        assert.ok(!('scans' in body), 'scans must be absent unless scan() was called');
+        // paths stays: the drift branch does not hydrate it, so an omitted paths would
+        // leave the run with nothing to capture.
+        assert.deepStrictEqual(body.paths, [{ path: '/', label: 'Home' }]);
+        return { ok: true, json: async () => ({ jobId: 'job-bare' }) };
+    });
+    await sdk.test('https://preview.example.com').forProject('test-project').run();
+    console.log('  OK: bare run() sends no invented defaults');
+    restoreFetch();
+
+    // The other half of each pair above: set explicitly, and it must reach the wire.
+    console.log('  Testing run() sends devices and scans when asked...');
+    setMockFetch(async (url, options) => {
+        const body = JSON.parse(options.body);
+        assert.deepStrictEqual(body.devices, ['iPhone 13']);
+        assert.deepStrictEqual(body.scans, [{ pattern: '/blog/**', options: { limit: 5 } }]);
+        return { ok: true, json: async () => ({ jobId: 'job-set' }) };
+    });
+    await sdk.test('https://preview.example.com')
+        .forProject('test-project')
+        .on(['iPhone 13'])
+        .scan('/blog/**', { limit: 5 })
+        .run();
+    console.log('  OK: on() and scan() are sent when set');
+    restoreFetch();
+
+    console.log('  Testing run() sends concurrency when asked...');
+    setMockFetch(async (url, options) => {
+        assert.strictEqual(JSON.parse(options.body).concurrency, 20);
+        return { ok: true, json: async () => ({ jobId: 'job-conc' }) };
+    });
+    await sdk.test('https://preview.example.com').forProject('test-project').concurrency(20).run();
+    console.log('  OK: concurrency() is sent when set');
+    restoreFetch();
+
+    // `changes` is optional: absent means the document comparison could not run on that
+    // page, not that nothing changed. The SDK does no parsing — it hands back what the API
+    // sent — so this locks that it neither strips the field when present nor invents it
+    // when absent, and that reading it when absent is safe.
+    console.log('  Testing getSummary() passes changes through, present or absent...');
+    const withChanges = {
+        url: '/a', variantName: 'Desktop Chrome', status: 'SUCCESS', changed: true,
+        diffPercentage: 1.2, visualMatchScore: 98.8, isNewBaseline: false,
+        baselineUrl: null, currentUrl: null, diffUrl: null,
+        changes: [{ type: 'text-edit', element: 'h1', before: 'Old', after: 'New' }]
+    };
+    const withoutChanges = {
+        url: '/b', variantName: 'Desktop Chrome', status: 'SUCCESS', changed: true,
+        diffPercentage: 0.4, visualMatchScore: 99.6, isNewBaseline: false,
+        baselineUrl: null, currentUrl: null, diffUrl: null,
+        domAssistSkipReason: 'dom snapshot unavailable'
+    };
+    setMockFetch(async () => ({
+        ok: true,
+        json: async () => ({ jobId: 'job-changes', regressions: [withChanges, withoutChanges], matches: [] })
+    }));
+    const changesSummary = await sdk.job('job-changes').getSummary();
+    assert.deepStrictEqual(changesSummary.regressions[0].changes, withChanges.changes);
+    assert.strictEqual('changes' in changesSummary.regressions[1], false, 'absent changes must stay absent');
+    assert.strictEqual(changesSummary.regressions[1].domAssistSkipReason, 'dom snapshot unavailable');
+    // What a consumer actually does with an absent array — this must not throw.
+    assert.deepStrictEqual((changesSummary.regressions[1].changes ?? []).map(c => c.type), []);
+    console.log('  OK: changes survives round-trip and is safe to read when absent');
+    restoreFetch();
+
     console.log('All JobBuilder tests passed!\n');
 }
 
