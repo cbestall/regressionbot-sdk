@@ -547,7 +547,7 @@ async function testProjectMethods() {
 
 async function testCliHelpers() {
     console.log('Testing CLI helpers...');
-    const { parseArgs, parseFailOn, isBlocking, buildRunContext } = require('../dist/cli');
+    const { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext } = require('../dist/cli');
 
     // A CSS custom property starts with '--', so the space-separated form cannot carry it:
     // the value is indistinguishable from the next flag. --key=value is the escape hatch.
@@ -585,6 +585,36 @@ async function testCliHelpers() {
     assert.strictEqual(isBlocking({ verdict: { decision: 'intentional' } }), false);
     assert.strictEqual(isBlocking({ verdict: { decision: 'noise' } }), false);
     console.log('  OK: only bugs, needs-review and unjudged changes block');
+
+    // The exit-code decision itself, not just the per-result predicate feeding it.
+    console.log('  Testing which regressions fail the build...');
+    const intentional = { url: '/a', verdict: { decision: 'intentional' } };
+    const noise = { url: '/b', verdict: { decision: 'noise' } };
+    const bug = { url: '/c', verdict: { decision: 'bug' } };
+    const unjudged = { url: '/d' };
+
+    // 'any' ignores verdicts entirely — an intentional change still fails the build.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, noise], 'any'),
+        { blocking: [intentional, noise], excused: 0 }
+    );
+    // 'unintended' excuses everything the verdict accounted for.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, noise], 'unintended'),
+        { blocking: [], excused: 2 }
+    );
+    // One bug among expected changes still fails.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, bug, noise], 'unintended'),
+        { blocking: [bug], excused: 2 }
+    );
+    // The silent-pass hazard: nothing judged this, so it must not be excused.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, unjudged], 'unintended'),
+        { blocking: [unjudged], excused: 1 }
+    );
+    assert.deepStrictEqual(selectBlocking([], 'unintended'), { blocking: [], excused: 0 });
+    console.log('  OK: exit-code decision honours each mode, and never excuses an unjudged change');
 
     console.log('  Testing intent flags...');
     assert.strictEqual(buildRunContext({}), undefined, 'no intent flags means no runContext');

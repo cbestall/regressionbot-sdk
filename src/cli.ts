@@ -57,6 +57,18 @@ function isBlocking(r: PageResult): boolean {
     return r.verdict.decision === 'bug' || r.verdict.decision === 'needs_review';
 }
 
+/**
+ * Splits regressions into the ones that fail the build and a count of the ones excused.
+ *
+ * Pure, and exported, because this is the decision that sets the exit code — the whole
+ * point of --fail-on. Testing isBlocking alone proves nothing about whether the caller
+ * applies it correctly for each mode.
+ */
+function selectBlocking(regressions: PageResult[], failOn: FailOn): { blocking: PageResult[]; excused: number } {
+    const blocking = failOn === 'any' ? regressions : regressions.filter(isBlocking);
+    return { blocking, excused: regressions.length - blocking.length };
+}
+
 function buildRunContext(options: any): RunContext | undefined {
     const context: RunContext = {};
     if (typeof options['change-description'] === 'string') context.changeDescription = options['change-description'];
@@ -312,11 +324,8 @@ Waiting for completion...
         console.log('\n❌ Regressions found:');
         summary.regressions.forEach(printRegression);
 
-        const blocking = failOn === 'any'
-            ? summary.regressions
-            : summary.regressions.filter(isBlocking);
+        const { blocking, excused } = selectBlocking(summary.regressions, failOn);
 
-        const excused = summary.regressionCount - blocking.length;
         if (excused > 0) {
             console.log(`\n✅ ${excused} of ${summary.regressionCount} matched the stated intent and did not fail the build.`);
         }
@@ -406,4 +415,4 @@ if (require.main === module) {
     main();
 }
 
-export { parseArgs, parseFailOn, isBlocking, buildRunContext };
+export { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext };
