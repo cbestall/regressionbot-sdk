@@ -50,8 +50,9 @@ export interface ProjectConfig {
     testAuth?: { configured: true };
     /** Presence flag only — the stored credential is never returned. */
     baseAuth?: { configured: true };
+    /** Pages captured in parallel, 1–20. Absent means the API's default of 4. */
     concurrency?: number;
-    /** Extra instructions handed to the model that writes change summaries. */
+    /** Extra instructions handed to the model that writes change summaries. Max 1000 characters. */
     aiPromptInstructions?: string;
     /** Diff percentage below which a regression is skipped by the AI pass. Defaults to 0.01. */
     aiSummaryThreshold?: number;
@@ -106,7 +107,12 @@ export interface ProjectConfigUpdate {
     testAuth?: EnvGate | null;
     /** Credentials for the base origin's environment gate. Pass null to clear. */
     baseAuth?: EnvGate | null;
+    /**
+     * Pages captured in parallel, 1–20. Rejected outside that range. Leave it unset to
+     * take the API's default of 4 — the load lands on the site being captured.
+     */
     concurrency?: number;
+    /** Max 1000 characters. */
     aiPromptInstructions?: string;
     aiSummaryThreshold?: number;
     baselinePolicy?: BaselinePolicy;
@@ -226,7 +232,21 @@ export interface PageResult {
     status: 'SUCCESS' | 'ERROR';
     /** Device variant tested (e.g. "Desktop Chrome", "iPhone 12"). */
     variantName: string;
-    /** Percentage of pixels that differed from the baseline (0 = identical). */
+    /**
+     * Whether this page is considered changed. Read this rather than deriving it from
+     * `diffPercentage` — it is the same rule the API uses to split `regressions` from
+     * `matches`, and a text edit that moved no pixels is changed at 0.00%.
+     */
+    changed: boolean;
+    /**
+     * Set when the document diff found a content change. Present only when true, and the
+     * reason a page can be `changed` at a `diffPercentage` of 0.
+     */
+    contentChanged?: true;
+    /**
+     * Percentage of pixels that differed from the baseline. Not a change test on its own:
+     * 0 does not mean identical — see `changed`.
+     */
     diffPercentage: number;
     /** Perceptual similarity 0-100 (SSIM). */
     visualMatchScore: number;
@@ -248,6 +268,8 @@ export interface PageResult {
      *
      * Prefer this over `regressionbotSummary`: it is measured rather than described, so it
      * carries no confidence and can be quoted directly.
+     *
+     * Capped at 40 per page — a page at the cap has more changes than are listed here.
      */
     changes?: Change[];
     /** Selectors of the elements that changed, when the DOM comparison could identify them. */
@@ -264,11 +286,6 @@ export interface PageResult {
     currentUrl: string | null;
     /** Pre-signed URL for the side-by-side annotated diff image. */
     diffUrl: string | null;
-    /**
-     * Pre-signed URL for the diff mask. getStatus() always sends the key, null when
-     * there is no mask; getSummary() omits it entirely in that case.
-     */
-    maskUrl?: string | null;
 }
 
 export interface JobProgress {
