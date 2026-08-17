@@ -415,4 +415,4 @@ if (require.main === module) {
     main();
 }
 
-export { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext };
+export { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext, printRegression };

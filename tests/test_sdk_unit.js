@@ -547,7 +547,7 @@ async function testProjectMethods() {
 
 async function testCliHelpers() {
     console.log('Testing CLI helpers...');
-    const { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext } = require('../dist/cli');
+    const { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext, printRegression } = require('../dist/cli');
 
     // A CSS custom property starts with '--', so the space-separated form cannot carry it:
     // the value is indistinguishable from the next flag. --key=value is the escape hatch.
@@ -623,6 +623,30 @@ async function testCliHelpers() {
         { changeDescription: 'restyle pricing', gitCommitSha: 'abc123', expectedChanges: ['darker table', 'new font'] }
     );
     console.log('  OK: intent flags build a runContext');
+
+    // Every optional field on PageResult can be absent on a real result: no diff image,
+    // no verdict when the run carried no intent, no summary below the AI threshold.
+    // Printing must survive all of that rather than throw mid-report.
+    console.log('  Testing printRegression tolerates absent optional fields...');
+    const logged = [];
+    const realLog = console.log;
+    console.log = (...args) => logged.push(args.join(' '));
+    try {
+        printRegression({ url: '/bare', variantName: 'Desktop Chrome', visualMatchScore: 99.5, diffUrl: null });
+        printRegression({
+            url: '/full', variantName: 'iPhone 13', visualMatchScore: 88.25,
+            diffUrl: 'https://example.com/d.png',
+            verdict: { decision: 'bug', minConfidence: 0.7, avgConfidence: 0.85 },
+            regressionbotSummary: [{ label: 'A', text: 'Header moved' }]
+        });
+    } finally {
+        console.log = realLog;
+    }
+    assert.ok(logged.some(l => l.includes('/bare') && l.includes('99.50')), 'bare result still prints its score');
+    assert.ok(!logged.some(l => l.includes('Diff: null')), 'a null diffUrl must not print as the string null');
+    assert.ok(logged.some(l => l.includes('Verdict: bug')), 'verdict prints when present');
+    assert.ok(logged.some(l => l.includes('[A] Header moved')), 'summary prints when present');
+    console.log('  OK: printRegression handles minimal and full results');
 
     console.log('All CLI helper tests passed!\n');
 }
