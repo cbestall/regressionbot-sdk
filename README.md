@@ -57,9 +57,9 @@ The rest surface as type errors:
 
 - **`PageResult.diffCount` is gone.** No endpoint ever returned it — both
   `getJobStatus` and `getJobSummary` strip it. `PageResult` gains the fields they
-  do return: `status`, `isNewBaseline`, `errorMessage`, `elementsChanged`,
-  `domAssistSkipReason`, `maskUrl` and `verdict`. Image URLs are typed nullable,
-  which they always were.
+  do return: `status`, `changed`, `isNewBaseline`, `errorMessage`,
+  `elementsChanged`, `domAssistSkipReason` and `verdict`. Image URLs are typed
+  nullable, which they always were.
 - **`updateProject()` takes `ProjectConfigUpdate`, not `Partial<ProjectConfig>`.**
   The read and write shapes genuinely differ: a gate credential is written as an
   `EnvGate` and read back only as `{ configured: true }`.
@@ -73,6 +73,23 @@ New in 2.0 and requiring a current API: `.customCss()` and `.withContext()` on
 the builder, intent-aware verdicts, environment gates, baseline policies, and
 scheduling. `scheduleHourUtc` needs API 2.7.0 or later — on an older API the
 field is accepted and ignored, and the schedule stays anchored to its first run.
+
+### 2.0.1
+
+- **The builder no longer invents defaults.** It used to send `concurrency: 10`
+  on every run, plus an empty `devices` list. The API compares every parameter it
+  receives against the saved project config and rejects the run on a mismatch, so
+  a project storing any other concurrency — including none, which is every project
+  created outside the SDK — failed with *"Params differ from stored config"* and
+  there was no way to unset the field. Call `.concurrency(n)` only when you mean
+  it; unset now means the API's default of 4, not 10.
+- **`PageResult.maskUrl` is gone.** It was never on the public contract: both
+  endpoints emit it to internal callers only. It was listed here in 2.0.0 by
+  mistake.
+- **`PageResult.changed` added**, with `contentChanged` alongside it. This is the
+  rule the API uses to split `regressions` from `matches`. Read it instead of
+  testing `diffPercentage === 0` — a text edit that moves no pixels is a
+  regression at 0.00%.
 
 ## Usage
 
@@ -124,8 +141,9 @@ const job = await rb
   // Discovery: Auto-discover up to 20 blog posts
   .scan('/blog/**', { limit: 20 })
   
-  // Concurrency: Max parallel browser instances
-  .concurrency(10)
+  // Concurrency: pages captured in parallel, 1-20. Omit it to take the default of 4 —
+  // the load lands on the site being captured, not on RegressionBot.
+  .concurrency(8)
 
   // Masking: Automatic and manual masking
   .mask(['.ads', '#modal']) // Manual selectors
