@@ -74,7 +74,10 @@ the builder, intent-aware verdicts, environment gates, baseline policies, and
 scheduling. `scheduleHourUtc` needs API 2.7.0 or later — on an older API the
 field is accepted and ignored, and the schedule stays anchored to its first run.
 
-### 2.0.1
+### 2.0.1 — never published separately; included in 2.1.0
+
+Upgrading from 2.0.0 goes straight to 2.1.0, so read this section as well as the
+next one.
 
 - **The builder no longer invents defaults.** It used to send `concurrency: 10`
   on every run, plus an empty `devices` list. The API compares every parameter it
