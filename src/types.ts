@@ -171,6 +171,38 @@ export interface ResultVerdict {
     avgConfidence: number;
     /** Keyed by region label (A, B, C…). Empty when the verdict came from the text-only pass. */
     regions: Record<string, RegionVerdict>;
+    /**
+     * What the judgement was made from.
+     *
+     * `measured` — the exact edits from the document diff were in front of the model.
+     * `described` — only a generated sentence about the change was, because the DOM engine
+     * could not run on that page. Absent on the vision path, which reads the images.
+     *
+     * Worth more than the confidence numbers when deciding how much weight to give a
+     * verdict: a `described` one was reached without seeing what actually changed.
+     */
+    basis?: 'measured' | 'described';
+}
+
+/**
+ * One change on a page, computed by diffing the two documents rather than described by a
+ * model. This is the exact answer to "what changed" — read it before the prose summary.
+ */
+export interface Change {
+    /** text-edit, insert, delete, move-with-edit, style-only. */
+    type: string;
+    /** Tag name of the element that changed. */
+    element: string;
+    /** The text before the edit. Absent on an insert. */
+    before?: string;
+    /** The text after the edit. Absent on a delete. */
+    after?: string;
+    /** Changed computed styles, as property -> [from, to]. */
+    style?: Record<string, [string, string]>;
+    /** Where it sits in the current capture, in capture pixels. Absent on a delete. */
+    box?: { x: number; y: number; w: number; h: number };
+    /** Where it was in the baseline, present only when it differs from `box`. */
+    boxBefore?: { x: number; y: number; w: number; h: number };
 }
 
 export interface RegressionbotSummaryItem {
@@ -209,6 +241,15 @@ export interface PageResult {
      * the run carried a {@link RunContext}, and only once summaryStatus is COMPLETE.
      */
     verdict?: ResultVerdict;
+    /**
+     * The exact edits the engine computed from the two documents — element, text before,
+     * text after, changed styles. Absent when the DOM comparison could not run on the page,
+     * which is not the same as nothing having changed.
+     *
+     * Prefer this over `regressionbotSummary`: it is measured rather than described, so it
+     * carries no confidence and can be quoted directly.
+     */
+    changes?: Change[];
     /** Selectors of the elements that changed, when the DOM comparison could identify them. */
     elementsChanged?: string[];
     /**
