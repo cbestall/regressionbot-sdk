@@ -179,7 +179,7 @@ async function startJob(url: string, options: any) {
 
     console.log(`✅ Job started! ID: ${job.jobId}`);
     console.log(`📊 Project: ${projectId}`);
-    console.log(`📱 Matrix: ${typeof options.on === 'string' ? options.on : 'project default'}`);
+    console.log(`📱 Matrix: ${typeof options.on === 'string' ? options.on : 'Desktop Chrome (default)'}`);
     if (options.scan) {
         console.log(`🔍 Scan: ${options.scan} (Exclude: ${options.exclude || 'none'})`);
     }

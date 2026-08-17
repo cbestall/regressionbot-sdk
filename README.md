@@ -83,6 +83,10 @@ field is accepted and ignored, and the schedule stays anchored to its first run.
   created outside the SDK — failed with *"Params differ from stored config"* and
   there was no way to unset the field. Call `.concurrency(n)` only when you mean
   it; unset now means the API's default of 4, not 10.
+- **CLI: `--concurrency` now rejects a missing or non-numeric value** instead of
+  coercing it. `--concurrency` with no value used to run at 1, and a
+  non-numeric one used to run at 10; both now fail with a message. Passing a
+  valid `1`–`20` is unchanged.
 - **`PageResult.maskUrl` is gone.** It was never on the public contract: both
   endpoints emit it to internal callers only. It was listed here in 2.0.0 by
   mistake.
