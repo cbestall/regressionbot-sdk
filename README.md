@@ -99,6 +99,18 @@ field is accepted and ignored, and the schedule stays anchored to its first run.
   testing `diffPercentage === 0` — a text edit that moves no pixels is a
   regression at 0.00%.
 
+### 2.1.0
+
+- **`--fail-on unintended`** on the CLI: exit 1 only on changes judged a bug or
+  needing review, so expected changes keep CI green. Comes with
+  `--change-description`, `--expected-changes`, `--pr-title` and `--commit` to
+  describe the run. Default behaviour is unchanged.
+- **`--flag=value` is now accepted** for every flag. Required when the value starts
+  with `--`, such as a CSS custom property: `--custom-css="--brand: #fff"` used to
+  drop its value silently.
+- The run command now reports capture errors even when there are also regressions.
+  They used to be hidden behind the regression branch.
+
 ## Usage
 
 ### Basic Example
@@ -452,7 +464,33 @@ screenshot:
 npx @regressionbot/sdk https://example.com --project my-site --custom-css "#chat-widget { display: none !important; }"
 ```
 
-#### 3. Job Summary
+Any flag also accepts `--flag=value`. You need that form when the value itself starts with
+`--`, such as a CSS custom property — otherwise it looks like the next flag and is dropped:
+```bash
+npx @regressionbot/sdk https://example.com --project my-site --custom-css="--brand-bg: #fff"
+```
+
+#### 3. Failing CI only on unintended changes
+
+By default any regression exits 1. Describe what the run is meant to change and
+`--fail-on unintended` will keep the build green for changes that match, failing only on
+what looks like a bug:
+
+```bash
+npx @regressionbot/sdk https://preview.example.com \
+  --project my-site \
+  --change-description "Restyle the pricing table" \
+  --expected-changes "Pricing table is now dark,Buttons are rounded" \
+  --commit "$GITHUB_SHA" \
+  --fail-on unintended
+```
+
+A change with no verdict always fails the build — if the run carried no intent, or the
+summary pass hasn't finished, nothing judged it, and treating that as expected would turn a
+missing verdict into a silent pass. So `--fail-on unintended` without
+`--change-description` behaves like `--fail-on any`, and warns that it will.
+
+#### 4. Job Summary
 Get detailed results and diff URLs for a completed job.
 ```bash
 npx @regressionbot/sdk summary <jobId>
@@ -468,7 +506,7 @@ Use the `--download-full` flag to save baseline, current, and diff images:
 npx @regressionbot/sdk summary <jobId> --download-full
 ```
 
-#### 4. Approve Changes
+#### 5. Approve Changes
 Promote the current screenshots of a job to be the new baselines.
 ```bash
 npx @regressionbot/sdk approve <jobId>

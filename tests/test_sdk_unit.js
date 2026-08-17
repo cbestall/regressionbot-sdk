@@ -545,8 +545,115 @@ async function testProjectMethods() {
     console.log('All Project tests passed!\n');
 }
 
+async function testCliHelpers() {
+    console.log('Testing CLI helpers...');
+    const { parseArgs, parseFailOn, isBlocking, selectBlocking, buildRunContext, printRegression } = require('../dist/cli');
+
+    // A CSS custom property starts with '--', so the space-separated form cannot carry it:
+    // the value is indistinguishable from the next flag. --key=value is the escape hatch.
+    console.log('  Testing --key=value parsing...');
+    const eq = parseArgs(['--custom-css=--brand: red; color: blue', '--project', 'p']);
+    assert.strictEqual(eq['custom-css'], '--brand: red; color: blue');
+    assert.strictEqual(eq.project, 'p');
+
+    // The old behaviour, kept: a space-separated value that starts with '--' is lost.
+    const spaced = parseArgs(['--custom-css', '--brand: red']);
+    assert.strictEqual(spaced['custom-css'], true, 'space-separated form still cannot carry a -- value');
+
+    assert.strictEqual(parseArgs(['--a=1=2']).a, '1=2', 'splits on the first = only');
+    assert.deepStrictEqual(parseArgs(['run', '--x']), Object.assign(Object.create(null), { _: ['run'], x: true }));
+    console.log('  OK: --key=value parses, including values starting with --');
+
+    console.log('  Testing prototype pollution guards...');
+    assert.strictEqual(parseArgs(['--__proto__=polluted']).polluted, undefined);
+    assert.strictEqual(({}).polluted, undefined, 'Object.prototype must be untouched');
+    assert.strictEqual(parseArgs(['--constructor=x']).constructor, undefined, 'constructor must not be set');
+    assert.strictEqual(parseArgs(['--__proto__', 'v', '--project', 'p']).project, 'p', 'blocked key still consumes its value');
+    console.log('  OK: blocked keys are dropped in both forms');
+
+    console.log('  Testing --fail-on...');
+    assert.strictEqual(parseFailOn(undefined), 'any');
+    assert.strictEqual(parseFailOn('unintended'), 'unintended');
+    assert.throws(() => parseFailOn('sometimes'), /--fail-on takes/);
+    assert.throws(() => parseFailOn(true), /--fail-on takes/);
+
+    // An unjudged regression must block: nothing decided it was wanted, and passing it
+    // would turn a missing verdict into a silent green build.
+    assert.strictEqual(isBlocking({}), true, 'no verdict blocks');
+    assert.strictEqual(isBlocking({ verdict: { decision: 'bug' } }), true);
+    assert.strictEqual(isBlocking({ verdict: { decision: 'needs_review' } }), true);
+    assert.strictEqual(isBlocking({ verdict: { decision: 'intentional' } }), false);
+    assert.strictEqual(isBlocking({ verdict: { decision: 'noise' } }), false);
+    console.log('  OK: only bugs, needs-review and unjudged changes block');
+
+    // The exit-code decision itself, not just the per-result predicate feeding it.
+    console.log('  Testing which regressions fail the build...');
+    const intentional = { url: '/a', verdict: { decision: 'intentional' } };
+    const noise = { url: '/b', verdict: { decision: 'noise' } };
+    const bug = { url: '/c', verdict: { decision: 'bug' } };
+    const unjudged = { url: '/d' };
+
+    // 'any' ignores verdicts entirely — an intentional change still fails the build.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, noise], 'any'),
+        { blocking: [intentional, noise], excused: 0 }
+    );
+    // 'unintended' excuses everything the verdict accounted for.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, noise], 'unintended'),
+        { blocking: [], excused: 2 }
+    );
+    // One bug among expected changes still fails.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, bug, noise], 'unintended'),
+        { blocking: [bug], excused: 2 }
+    );
+    // The silent-pass hazard: nothing judged this, so it must not be excused.
+    assert.deepStrictEqual(
+        selectBlocking([intentional, unjudged], 'unintended'),
+        { blocking: [unjudged], excused: 1 }
+    );
+    assert.deepStrictEqual(selectBlocking([], 'unintended'), { blocking: [], excused: 0 });
+    console.log('  OK: exit-code decision honours each mode, and never excuses an unjudged change');
+
+    console.log('  Testing intent flags...');
+    assert.strictEqual(buildRunContext({}), undefined, 'no intent flags means no runContext');
+    assert.deepStrictEqual(
+        buildRunContext({ 'change-description': 'restyle pricing', 'expected-changes': 'darker table, new font ', commit: 'abc123' }),
+        { changeDescription: 'restyle pricing', gitCommitSha: 'abc123', expectedChanges: ['darker table', 'new font'] }
+    );
+    console.log('  OK: intent flags build a runContext');
+
+    // Every optional field on PageResult can be absent on a real result: no diff image,
+    // no verdict when the run carried no intent, no summary below the AI threshold.
+    // Printing must survive all of that rather than throw mid-report.
+    console.log('  Testing printRegression tolerates absent optional fields...');
+    const logged = [];
+    const realLog = console.log;
+    console.log = (...args) => logged.push(args.join(' '));
+    try {
+        printRegression({ url: '/bare', variantName: 'Desktop Chrome', visualMatchScore: 99.5, diffUrl: null });
+        printRegression({
+            url: '/full', variantName: 'iPhone 13', visualMatchScore: 88.25,
+            diffUrl: 'https://example.com/d.png',
+            verdict: { decision: 'bug', minConfidence: 0.7, avgConfidence: 0.85 },
+            regressionbotSummary: [{ label: 'A', text: 'Header moved' }]
+        });
+    } finally {
+        console.log = realLog;
+    }
+    assert.ok(logged.some(l => l.includes('/bare') && l.includes('99.50')), 'bare result still prints its score');
+    assert.ok(!logged.some(l => l.includes('Diff: null')), 'a null diffUrl must not print as the string null');
+    assert.ok(logged.some(l => l.includes('Verdict: bug')), 'verdict prints when present');
+    assert.ok(logged.some(l => l.includes('[A] Header moved')), 'summary prints when present');
+    console.log('  OK: printRegression handles minimal and full results');
+
+    console.log('All CLI helper tests passed!\n');
+}
+
 async function runAllTests() {
     try {
+        await testCliHelpers();
         await testJobBuilderMethods();
         await testJobHandleMethods();
         await testDownloadResults();
