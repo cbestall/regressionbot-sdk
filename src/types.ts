@@ -207,7 +207,19 @@ export type ChangeType =
     | 'move'
     | 'move-with-edit'
     | 'sticky-reposition'
-    | 'reflow-displacement';
+    | 'reflow-displacement'
+    /**
+     * The six metadata types: the page's head or its structured data changed while nothing
+     * visible moved — a title edited, a canonical rewritten, a JSON-LD block dropped. They
+     * carry no `box`, because they paint nothing; `element` names the field instead
+     * (`title`, `meta[description]`, `link[rel=canonical]`, `ld+json[FAQPage]`).
+     */
+    | 'meta-edit'
+    | 'meta-insert'
+    | 'meta-delete'
+    | 'schema-edit'
+    | 'schema-insert'
+    | 'schema-delete';
 
 /** One changed CSS property, as `[from, to]`. */
 export type StyleDelta = [from: string, to: string];
@@ -228,12 +240,19 @@ export interface Change {
     type: ChangeType;
     /**
      * Tag name only, lowercase, e.g. `div` — not a CSS selector and not unique on the page.
-     * For something you can query with, see `PageResult.elementsChanged`.
+     * For a metadata type, the field that changed instead. For something you can query
+     * with, see `PageResult.elementsChanged`.
      */
     element: string;
-    /** The text before the edit. Absent on an insert. */
+    /**
+     * The text before the edit. Absent on an insert.
+     *
+     * Clipped to 200 characters. A long passage with one edit deep inside it is quoted from
+     * where the two sides diverge, with a leading `…`, so `before` and `after` always show
+     * the words that changed rather than a shared opening that hides them.
+     */
     before?: string;
-    /** The text after the edit. Absent on a delete. */
+    /** The text after the edit. Absent on a delete. Clipped the same way as `before`. */
     after?: string;
     /** Changed computed styles, keyed by CSS property name. */
     style?: Record<string, StyleDelta>;
@@ -246,9 +265,19 @@ export interface Change {
      *
      * Absent on a delete, and absent whenever the element's position cannot be trusted:
      * an out-of-flow element reports a viewport-relative rect that would point at empty
-     * space in a full-page image, so the box is omitted rather than sent wrong.
+     * space in a full-page image, so the box is omitted rather than sent wrong. Always
+     * absent on the metadata types and on a {@link Change.collapsed} change, which paint
+     * nothing. A filter written as `c.box && c.box.y < N` silently drops all of those.
      */
     box?: ChangeBox;
+    /**
+     * Present and true when the element sits inside a closed `<details>`. The browser lays
+     * such content out but never paints it, so the change is real and in the document while
+     * nothing in either capture shows it — an edited FAQ answer nobody expanded. Say
+     * "inside a collapsed section" when reporting it; a reader sent to the screenshot will
+     * not find it there.
+     */
+    collapsed?: boolean;
     /**
      * Where it was in the baseline, in the same coordinate space, present only when it
      * differs from `box` in position or size. Subtract for the move vector
@@ -295,6 +324,12 @@ export interface PageResult {
      */
     contentChanged?: true;
     /**
+     * Present and true when the head or structured data changed while nothing visible
+     * moved. There is nothing to see in the images for these; read `changes`. Absent on a
+     * page whose baseline predates metadata capture, which is silence rather than "no".
+     */
+    metadataChanged?: true;
+    /**
      * Percentage of pixels that differed from the baseline. Not a change test on its own:
      * 0 does not mean identical — see `changed`.
      */
@@ -337,7 +372,14 @@ export interface PageResult {
     baselineUrl: string | null;
     /** Pre-signed URL for the newly captured screenshot. */
     currentUrl: string | null;
-    /** Pre-signed URL for the side-by-side annotated diff image. */
+    /**
+     * The page's inspect link. Fetched, it returns the side-by-side annotated diff image;
+     * opened in a browser it goes to the inspect view. Null for an unchanged page.
+     *
+     * A page that changed with no changed pixels — a text edit inside a collapsed section,
+     * a metadata change — has no diff image, so this is the current capture's link instead
+     * and equals `currentUrl`. It still opens the inspect view with the document diff.
+     */
     diffUrl: string | null;
 }
 

@@ -369,6 +369,52 @@ async function testDownloadResults() {
     console.log('All downloadResults tests passed!\n');
 }
 
+async function testDownloadSkipsDiffOfDiffLessChange() {
+    console.log('Testing downloadResults on a change with no diff image...');
+    const fs = require('fs');
+    const path = require('path');
+    const sdk = createMockSdk();
+    const job = sdk.job('job-no-diff');
+    const image = () => ({
+        ok: true, status: 200,
+        headers: { get: (n) => n.toLowerCase() === 'content-type' ? 'image/png' : null },
+        arrayBuffer: async () => new ArrayBuffer(4),
+    });
+    setMockFetch(async (url) => {
+        if (url === 'http://localhost:9999/job/job-no-diff/summary') {
+            return { ok: true, json: async () => ({
+                jobId: 'job-no-diff', status: 'COMPLETED', totalUrls: 1, completedCount: 1,
+                overallScore: 100, executionTime: 1, regressionCount: 1, matchCount: 0, newBaselineCount: 0, errorCount: 0,
+                // A text edit inside a collapsed section: zero changed pixels, no diff image,
+                // so the API hands back the current capture's link as diffUrl.
+                regressions: [{
+                    url: 'https://usecite.ai/compare/peec-alternative/', variantName: 'desktop_chrome',
+                    diffPercentage: 0, visualMatchScore: 100, changed: true, contentChanged: true,
+                    changes: [{ type: 'text-edit', element: 'p', before: '… 20-prompt …', after: '… 30-prompt …', collapsed: true }],
+                    diffUrl: 'http://localhost:9999/images/current-peec',
+                    currentUrl: 'http://localhost:9999/images/current-peec',
+                    baselineUrl: 'http://localhost:9999/images/baseline-peec',
+                }],
+                matches: [], newBaselines: [], errors: [],
+            }) };
+        }
+        if (url.startsWith('http://localhost:9999/images/')) return image();
+        throw new Error(`Unexpected mock URL: ${url}`);
+    });
+    const testDir = path.join(__dirname, 'temp_test_downloads_nodiff');
+    if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+    try {
+        await job.downloadResults({ full: true, baseDir: testDir });
+        const folder = path.join(testDir, 'job_no_diff');
+        const files = fs.readdirSync(folder);
+        assert.ok(!files.some(f => f.includes('_diff_')), `must not file the current capture as a diff: ${files}`);
+        assert.ok(files.some(f => f.includes('_current_')), `--full still saves the current capture: ${files}`);
+        console.log('  OK: a diff-less change saves no _diff_ file');
+    } finally {
+        if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+    }
+}
+
 async function testValidation() {
     console.log('Testing validation...');
     
@@ -657,6 +703,7 @@ async function runAllTests() {
         await testJobBuilderMethods();
         await testJobHandleMethods();
         await testDownloadResults();
+        await testDownloadSkipsDiffOfDiffLessChange();
         await testProjectMethods();
         await testValidation();
         await testViewports();

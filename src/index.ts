@@ -417,7 +417,10 @@ export class JobHandle {
             const nameBase = sanitizeUrlToPath(r.url);
             const safeVariant = sanitizeFilename(r.variantName);
 
-            if (r.diffUrl) await download(r.diffUrl, `${nameBase}_diff_${safeVariant}`);
+            // A change with no changed pixels has no diff image: its diffUrl is the current
+            // capture's link, so saving it under a _diff_ name would file the plain screenshot
+            // as a diff. Nothing to save there; --full still writes it as _current_.
+            if (r.diffUrl && r.diffUrl !== r.currentUrl) await download(r.diffUrl, `${nameBase}_diff_${safeVariant}`);
             if (options.full) {
                 if (r.baselineUrl) await download(r.baselineUrl, `${nameBase}_baseline_${safeVariant}`);
                 if (r.currentUrl) await download(r.currentUrl, `${nameBase}_current_${safeVariant}`);
