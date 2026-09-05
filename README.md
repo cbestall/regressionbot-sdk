@@ -74,6 +74,16 @@ the builder, intent-aware verdicts, environment gates, baseline policies, and
 scheduling. `scheduleHourUtc` needs API 2.7.0 or later — on an older API the
 field is accepted and ignored, and the schedule stays anchored to its first run.
 
+### 2.2.0
+
+- **Six metadata `ChangeType`s added** (`meta-edit`, `meta-insert`, `meta-delete`,
+  `schema-edit`, `schema-insert`, `schema-delete`), plus `PageResult.metadataChanged`
+  and `Change.collapsed`. The API already returned the first two; the types never
+  declared them. None carry a `box`.
+- **`downloadResults()` no longer saves a plain screenshot as a diff.** A page that
+  changed with no changed pixels has `diffUrl === currentUrl`; the diff download is
+  skipped for it, and `--full` still saves the capture as `_current_`.
+
 ### 2.0.1 — never published separately; included in 2.1.0
 
 Upgrading from 2.0.0 goes straight to 2.1.0, so read this section as well as the
