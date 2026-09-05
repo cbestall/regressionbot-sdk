@@ -308,11 +308,6 @@ export class JobBuilder {
             throw new Error('Project ID is required. Use .forProject("id") or provide an origin to compare against using .against()');
         }
 
-        // If no checks/scans provided, default to root
-        if (this.manifest.checks.length === 0 && this.manifest.scans.length === 0) {
-            this.manifest.checks.push({ path: '/', label: 'Home' });
-        }
-
         // Every field present here is compared against the saved project config, and a
         // value that differs fails the run rather than overriding it. So a field the
         // caller never set must stay absent: an empty `devices` or a `concurrency` this
@@ -323,7 +318,7 @@ export class JobBuilder {
             sitemapUrl: this.manifest.sitemapUrl,
             baseOrigin: this.manifest.baseOrigin,
             devices: this.manifest.variants.length > 0 ? this.manifest.variants : undefined,
-            paths: this.manifest.checks,
+            paths: this.manifest.checks.length > 0 ? this.manifest.checks : undefined,
             scans: this.manifest.scans.length > 0 ? this.manifest.scans : undefined,
             concurrency: this.manifest.concurrency,
             autoApprove: this.manifest.autoApprove,

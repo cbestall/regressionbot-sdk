@@ -1,6 +1,6 @@
 {
   "name": "@regressionbot/sdk",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "The official SDK for regressionbot.com - the simplest way to automate visual regression testing.",
   "homepage": "https://regressionbot.com",
   "repository": {
