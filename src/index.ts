@@ -117,6 +117,10 @@ export class RegressionBot {
 
     /**
      * Trigger a new job run using a saved project configuration.
+     *
+     * Capture fields passed here are not overrides: the API compares each one to the
+     * saved config and rejects the run if it differs. Omit a field to use the saved
+     * value; change the saved value with updateProject().
      */
     public async runProject(
         projectName: string,
