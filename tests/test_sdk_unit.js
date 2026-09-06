@@ -96,9 +96,7 @@ async function testJobBuilderMethods() {
         assert.ok(!('concurrency' in body), 'concurrency must be absent unless concurrency() was called');
         assert.ok(!('devices' in body), 'devices must be absent unless on() was called');
         assert.ok(!('scans' in body), 'scans must be absent unless scan() was called');
-        // paths stays: the drift branch does not hydrate it, so an omitted paths would
-        // leave the run with nothing to capture.
-        assert.deepStrictEqual(body.paths, [{ path: '/', label: 'Home' }]);
+        assert.ok(!('paths' in body), 'paths must be absent unless check() was called');
         return { ok: true, json: async () => ({ jobId: 'job-bare' }) };
     });
     await sdk.test('https://preview.example.com').forProject('test-project').run();
@@ -431,13 +429,12 @@ async function testValidation() {
         console.log('  OK: Throws error when project/against missing');
     }
     
-    // Test that default check is added when no checks/scans
-    console.log('  Testing default check added...');
+    // No invented home path: the API fills omitted paths from the stored project, and
+    // a bare run on a project stored with more than "/" was rejected as differing.
+    console.log('  Testing no default check is invented...');
     setMockFetch(async (url, options) => {
         const body = JSON.parse(options.body);
-        assert.strictEqual(body.paths.length, 1);
-        assert.strictEqual(body.paths[0].path, '/');
-        assert.strictEqual(body.paths[0].label, 'Home');
+        assert.ok(!('paths' in body), 'paths must be absent when no check() was called');
         return {
             ok: true,
             json: async () => ({ jobId: 'job-default' })
@@ -446,7 +443,7 @@ async function testValidation() {
     
     const job = await sdk.test('https://example.com').forProject('test').run();
     assert.strictEqual(job.jobId, 'job-default');
-    console.log('  OK: Default check added when no checks/scans');
+    console.log('  OK: no default check invented when no checks/scans');
     restoreFetch();
     
     console.log('All validation tests passed!\n');

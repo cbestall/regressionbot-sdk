@@ -74,6 +74,15 @@ the builder, intent-aware verdicts, environment gates, baseline policies, and
 scheduling. `scheduleHourUtc` needs API 2.7.0 or later — on an older API the
 field is accepted and ignored, and the schedule stays anchored to its first run.
 
+### 2.2.1
+
+- **A builder run with no `check()` or `scan()` no longer invents a home path.** It
+  used to send `paths: [{ path: '/', label: 'Home' }]`, which the API compared to the
+  saved project and rejected whenever the project stored anything other than exactly
+  `/`. Now `paths` is omitted, and the API fills it from the saved project. Needs an
+  API that fills omitted run params from the stored project (shipped alongside this
+  release); on an older API a scope-less run captures the home page only.
+
 ### 2.2.0
 
 - **Six metadata `ChangeType`s added** (`meta-edit`, `meta-insert`, `meta-delete`,
