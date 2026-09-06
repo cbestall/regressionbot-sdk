@@ -309,7 +309,6 @@ intent-aware too:
 
 ```typescript
 const job = await rb.runProject('marketing-site-v2', {
-  testOrigin: process.env.VERCEL_PREVIEW_URL,
   runContext: { changeDescription: 'Restyle the pricing table' },
 });
 ```
@@ -374,10 +373,10 @@ console.log(projects.map(p => p.name));
 const project = await rb.getProject('marketing-site-v2');
 console.log(project);
 
-// Trigger a run from a saved project, optionally overriding fields
-const job = await rb.runProject('marketing-site-v2', {
-  testOrigin: process.env.VERCEL_PREVIEW_URL,
-});
+// Trigger a run from a saved project. Any capture field you pass is checked
+// against the saved config and rejected if it differs; leave it out to use
+// the saved value. Change the config with updateProject().
+const job = await rb.runProject('marketing-site-v2');
 
 const status = await job.waitForCompletion();
 const summary = await job.getSummary();
